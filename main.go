@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -14,6 +13,7 @@ type Kind struct {
 }
 
 type Card struct {
+	key byte
 	name string
 	cost int
 	kind []*Kind
@@ -32,17 +32,21 @@ func (c *Card) HasKind(k *Kind) bool {
 
 type Pile []*Card
 
-type Keycard struct {
-	key byte
-	card *Card
-}
-
 var (
 	KindDict = make(map[string]*Kind)
 	CardDict = make(map[string]*Card)
 	supply = make(map[*Card]int)
-	suplist []Keycard
+	suplist Pile
 )
+
+func keyToCard(key byte) *Card {
+	for _, c := range suplist {
+		if key == c.key {
+			return c
+		}
+	}
+	return nil
+}
 
 func (deck Pile) shuffle() {
 	if len(deck) < 1 {
@@ -163,7 +167,8 @@ Curse;0;Curse;C1
 		if !ok {
 			panic("unknown card: " + s)
 		}
-		suplist = append(suplist, Keycard{key, c})
+		suplist = append(suplist, c)
+                c.key = key
 	}
 	layout("Copper", 'q')
 	layout("Silver", 'w')
@@ -171,11 +176,11 @@ Curse;0;Curse;C1
 	layout("Estate", 'a')
 	layout("Duchy", 's')
 	layout("Province", 'd')
-	layout("Curse", '-')
+	layout("Curse", '!')
 	var draw func(n int)
 	draw = func(n int) {
 		if n == 0 {
-		 return
+			return
 		}
 		if len(deck) == 0 {
 			if len(discard) == 0 {
@@ -191,14 +196,14 @@ Curse;0;Curse;C1
 	draw(5)
 	for {
 		if player.b == 0 {
-			fmt.Printf("Next turn!\n")
+			fmt.Printf("*** end of turn ***\n")
 			discard, inplay = append(discard, inplay...), nil
 			discard, hand = append(discard, hand...), nil
 			player = Player{a:1, b:1, c:0}
 			draw(5)
 		}
-		for _, v := range suplist {
-			fmt.Printf("[%c] %v(%v) $%v\n", v.key, v.card.name, supply[v.card], v.card.cost)
+		for _, c := range suplist {
+			fmt.Printf("[%c] %v(%v) $%v\n", c.key, c.name, supply[c], c.cost)
 		}
 		fmt.Printf("Deck size: %v\n", len(deck))
 		fmt.Printf("Discard size: %v ", len(discard))
@@ -208,8 +213,8 @@ Curse;0;Curse;C1
 			fmt.Printf("(empty)\n")
 		}
 		fmt.Println("Hand:")
-		for i, c := range hand {
-			fmt.Printf("%v: %v\n", i+1, c.name)
+		for _, c := range hand {
+			fmt.Printf("[%c] %v\n", c.key, c.name)
 		}
 		if len(inplay) > 0 {
 			fmt.Printf("in play:")
@@ -219,66 +224,76 @@ Curse;0;Curse;C1
 			fmt.Println("");
 		}
 		fmt.Printf("[a:%v b:%v c:%v]> ", player.a, player.b, player.c)
-		var cmd string
-		_, err := fmt.Scanf("%s", &cmd)
+		prog := ""
+		_, err := fmt.Scanf("%s", &prog)
 		if err == io.EOF {
 						panic("unexpected EOF")
 		}
-		match, err := regexp.MatchString("[0-9]+", cmd)
-		if err != nil {
-			panic("bad regexp")
-		}
-		if match {
-			k, err := strconv.Atoi(cmd)
-			if err != nil {
-				fmt.Println("bad number")
-				continue
-			}
-			if k < 0 || k > len(hand) {
-				fmt.Println("out of range")
-				continue
-			}
-			if k == 0 {
+		i := 0
+		msg := ""
+		for ; i < len(prog); i++ {
+			switch prog[i] {
+			case '+':
+				if player.b == 0 {
+					msg = "no buys left"
+					break
+				}
+				i++
+				if i == len(prog) {
+					msg = "expected card"
+					break
+				}
+				choice := keyToCard(prog[i])
+				if choice == nil {
+					msg = "no such card"
+					break
+				}
+				if choice.cost > player.c {
+					msg = "insufficient money"
+					break
+				}
+				if supply[choice] == 0 {
+					msg = "supply exhausted"
+					break
+				}
+				fmt.Printf("%v gained\n", choice.name)
+				discard = append(discard, choice)
+				supply[choice]--
+				player.c -= choice.cost
+				player.b--
+			case '.':
 				player.b = 0
-				continue
+			default:
+				c := keyToCard(prog[i])
+				if c == nil {
+					msg = "unrecognized command"
+					break
+				}
+				if !c.HasKind(kTreasure) {
+					msg = "treasure expected"
+					break
+				}
+				var k int
+				for k = len(hand)-1; k >= 0; k-- {
+					if hand[k] == c {
+						player.c += c.n
+						hand = append(hand[:k], hand[k+1:]...)
+						inplay = append(inplay, c)
+						break
+					}
+				}
+				if k < 0 {
+					msg = "none in hand"
+				}
 			}
-			c := hand[k-1]
-			if !c.HasKind(kTreasure) {
-				fmt.Println("treasure expected")
-				continue
-			}
-			player.c += c.n
-			hand = append(hand[:k-1], hand[k:]...)
-			inplay = append(inplay, c)
-			continue
-		}
-		if len(cmd) != 1 {
-			fmt.Println("single character expected")
-			continue
-		}
-		var choice *Card
-		for _, v := range suplist {
-			if cmd[0] == v.key {
-				choice = v.card
+			if msg != "" {
+				fmt.Printf("Error: %v\n  %v\n  ", msg, prog)
+				for j := 0; j < i; j++ {
+					fmt.Printf(" ")
+				}
+				fmt.Printf("^\n")
 				break
 			}
 		}
-		if choice == nil {
-			fmt.Println("no such card")
-			continue
-		}
-		if choice.cost > player.c {
-			fmt.Println("insufficient money")
-			continue
-		}
-		if supply[choice] == 0 {
-			fmt.Println("supply exhausted")
-			continue
-		}
-		fmt.Printf("%v gained\n", choice.name)
-		discard = append(discard, choice)
-		supply[choice]--
-		player.c -= choice.cost
-		player.b--
 	}
 }
