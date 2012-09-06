@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"math/rand"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -19,6 +21,15 @@ type Card struct {
 	kind []*Kind
 	coin int
 	n int
+	supply int
+}
+
+func PanickyAtoi(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		panic(s)
+	}
+	return n
 }
 
 func (c *Card) HasKind(k *Kind) bool {
@@ -35,7 +46,6 @@ type Pile []*Card
 var (
 	KindDict = make(map[string]*Kind)
 	CardDict = make(map[string]*Card)
-	supply = make(map[*Card]int)
 	suplist Pile
 )
 
@@ -67,6 +77,36 @@ func (deck *Pile) Add(s string) {
 
 type Player struct {
 	a, b, c int
+	deck, hand, played, discard Pile
+}
+
+func (p *Player) draw(n int) {
+	if n == 0 {
+		return
+	}
+	if len(p.deck) == 0 {
+		if len(p.discard) == 0 {
+			return
+		}
+		p.deck, p.discard = p.discard, p.deck
+		p.deck.shuffle()
+	}
+	p.hand, p.deck = append(p.hand, p.deck[0]), p.deck[1:]
+	p.draw(n-1)
+}
+
+func (p *Player) play(k int) {
+	c := p.hand[k]
+	p.c += c.n
+	p.hand = append(p.hand[:k], p.hand[k+1:]...)
+	p.played = append(p.played, c)
+}
+
+func (p *Player) cleanup() {
+	p.discard, p.played = append(p.discard, p.played...), nil
+	p.discard, p.hand = append(p.discard, p.hand...), nil
+	p.draw(5)
+	p.a, p.b, p.c = 1, 1, 0
 }
 
 func getKind(s string) *Kind {
@@ -78,6 +118,7 @@ func getKind(s string) *Kind {
 }
 
 func main() {
+	rand.Seed(2)
 	initKind := func(s string) {
 		KindDict[s] = &Kind{s}
 	}
@@ -85,9 +126,11 @@ func main() {
 		initKind(s)
 	}
 	kTreasure := getKind("Treasure")
+	kVictory := getKind("Victory")
+	kCurse := getKind("Curse")
 
 	initCard := func(s string) {
-		a := strings.Split(s, ";")
+		a := strings.Split(s, ",")
 		if len(a) < 3 {
 			panic(s)
 		}
@@ -111,22 +154,22 @@ func main() {
 			s := a[i]
 			switch s[0] {
 			case '$':
-				n, err := strconv.Atoi(s[1:])
-				if err != nil {
-					panic(s)
-				}
-				c.n = n
+				c.n = PanickyAtoi(s[1:])
+			case 'V':
+				c.n = PanickyAtoi(s[1:])
+			case 'C':
+				c.n = -PanickyAtoi(s[1:])
 			}
 		}
 	}
 	db := `
-Copper;0;Treasure;$1
-Silver;3;Treasure;$2
-Gold;6;Treasure;$3
-Estate;2;Victory;V1
-Duchy;5;Victory;V3
-Province;8;Victory;V6
-Curse;0;Curse;C1
+Copper,0,Treasure,$1
+Silver,3,Treasure,$2
+Gold,6,Treasure,$3
+Estate,2,Victory,V1
+Duchy,5,Victory,V3
+Province,8,Victory,V6
+Curse,0,Curse,C1
 `
 	for _, line := range strings.Split(db, "\n") {
 		if len(line) > 0 {
@@ -139,7 +182,7 @@ Curse;0;Curse;C1
 		if !ok {
 			panic("no such card: " + s)
 		}
-		supply[c] = n
+		c.supply = n
 	}
 	setSupply("Copper", 60 - 7)
 	setSupply("Silver", 40)
@@ -151,15 +194,14 @@ Curse;0;Curse;C1
 	}
 	// 10, 20, 30
 	setSupply("Curse", 10)
-	var deck, hand, inplay, discard Pile
+	player := Player{a:1, b:1, c:0}
 	for i := 0; i < 3; i++ {
-		deck.Add("Estate")
+		player.deck.Add("Estate")
 	}
 	for i := 0; i < 7; i++ {
-		deck.Add("Copper")
+		player.deck.Add("Copper")
 	}
-	rand.Seed(1234)
-	deck.shuffle()
+	player.deck.shuffle()
 	fmt.Println("")
 
 	layout := func(s string, key byte) {
@@ -170,69 +212,100 @@ Curse;0;Curse;C1
 		suplist = append(suplist, c)
                 c.key = key
 	}
-	layout("Copper", 'q')
-	layout("Silver", 'w')
-	layout("Gold", 'e')
-	layout("Estate", 'a')
-	layout("Duchy", 's')
-	layout("Province", 'd')
+	layout("Copper", '1')
+	layout("Silver", '2')
+	layout("Gold", '3')
+	layout("Estate", 'q')
+	layout("Duchy", 'w')
+	layout("Province", 'e')
 	layout("Curse", '!')
-	var draw func(n int)
-	draw = func(n int) {
-		if n == 0 {
-			return
-		}
-		if len(deck) == 0 {
-			if len(discard) == 0 {
-				return
+	gameOver := func() {
+		fmt.Printf("Game over\n")
+		player.deck, player.discard = append(player.deck, player.discard...), nil
+		player.deck, player.hand = append(player.deck, player.hand...), nil
+		score := 0
+		m := make(map[*Card]struct {
+			count, pts int
+		})
+		for _, c := range player.deck {
+			if c.HasKind(kVictory) || c.HasKind(kCurse) {
+				v := m[c]
+				v.count++
+				v.pts += c.n
+				m[c] = v
+				score += c.n
 			}
-			deck, discard = discard, deck
-			deck.shuffle()
-		}
-		hand, deck = append(hand, deck[0]), deck[1:]
-		draw(n-1)
-	}
-	player := Player{a:1, b:1, c:0}
-	draw(5)
-	for {
-		if player.b == 0 {
-			fmt.Printf("*** end of turn ***\n")
-			discard, inplay = append(discard, inplay...), nil
-			discard, hand = append(discard, hand...), nil
-			player = Player{a:1, b:1, c:0}
-			draw(5)
 		}
 		for _, c := range suplist {
-			fmt.Printf("[%c] %v(%v) $%v\n", c.key, c.name, supply[c], c.cost)
+			if c.HasKind(kVictory) || c.HasKind(kCurse) {
+				v := m[c]
+				fmt.Printf("%v x %v: %v\n", v.count, c.name, v.pts)
+			}
 		}
-		fmt.Printf("Deck size: %v\n", len(deck))
-		fmt.Printf("Discard size: %v ", len(discard))
-		if len(discard) > 0 {
-			fmt.Printf("Top: %v\n", discard[len(discard)-1].name)
+		fmt.Printf("Score: %v\n", score)
+	}
+	player.draw(5)
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		if player.b == 0 {
+			fmt.Println("Cleaning up...")
+			player.cleanup()
+			n := 0
+			for _, c := range suplist {
+				if c.supply == 0 {
+					if c.name == "Province" {
+						n = 3
+						break
+					}
+					n++
+					if n == 3 {
+						break
+					}
+				}
+			}
+			if n == 3 {
+				gameOver()
+				return
+			}
+		}
+		for _, c := range suplist {
+			fmt.Printf("[%c] %v(%v) $%v\n", c.key, c.name, c.supply, c.cost)
+		}
+		fmt.Printf("Deck(%v)\n", len(player.deck))
+		fmt.Printf("Discard(%v): ", len(player.discard))
+		if len(player.discard) > 0 {
+			fmt.Printf("%v\n", player.discard[len(player.discard)-1].name)
 		} else {
 			fmt.Printf("(empty)\n")
 		}
 		fmt.Println("Hand:")
-		for _, c := range hand {
+		for _, c := range player.hand {
 			fmt.Printf("[%c] %v\n", c.key, c.name)
 		}
-		if len(inplay) > 0 {
-			fmt.Printf("in play:")
-			for _, c := range inplay {
+		if len(player.played) > 0 {
+			fmt.Printf("Played:")
+			for _, c := range player.played {
 				fmt.Printf(" %v", c.name)
 			}
 			fmt.Println("");
 		}
-		fmt.Printf("[a:%v b:%v c:%v]> ", player.a, player.b, player.c)
-		prog := ""
-		_, err := fmt.Scanf("%s", &prog)
+		fmt.Printf("a:%v b:%v c:%v> ", player.a, player.b, player.c)
+		prog, err := reader.ReadString('\n')
 		if err == io.EOF {
-						panic("unexpected EOF")
+			fmt.Printf("\nQuitting game...\n")
+			player.cleanup()
+			gameOver()
+			return
+		}
+		if err != nil {
+			panic(err)
 		}
 		i := 0
 		msg := ""
 		for ; i < len(prog); i++ {
 			switch prog[i] {
+			case '\n':
+			case ' ':
 			case '+':
 				if player.b == 0 {
 					msg = "no buys left"
@@ -252,17 +325,23 @@ Curse;0;Curse;C1
 					msg = "insufficient money"
 					break
 				}
-				if supply[choice] == 0 {
+				if choice.supply == 0 {
 					msg = "supply exhausted"
 					break
 				}
 				fmt.Printf("%v gained\n", choice.name)
-				discard = append(discard, choice)
-				supply[choice]--
+				player.discard = append(player.discard, choice)
+				choice.supply--
 				player.c -= choice.cost
 				player.b--
 			case '.':
 				player.b = 0
+			case '*':
+				for k := len(player.hand)-1; k >= 0; k-- {
+					if player.hand[k].HasKind(kTreasure) {
+						player.play(k)
+					}
+				}
 			default:
 				c := keyToCard(prog[i])
 				if c == nil {
@@ -274,11 +353,9 @@ Curse;0;Curse;C1
 					break
 				}
 				var k int
-				for k = len(hand)-1; k >= 0; k-- {
-					if hand[k] == c {
-						player.c += c.n
-						hand = append(hand[:k], hand[k+1:]...)
-						inplay = append(inplay, c)
+				for k = len(player.hand)-1; k >= 0; k-- {
+					if player.hand[k] == c {
+						player.play(k)
 						break
 					}
 				}
