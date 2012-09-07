@@ -20,8 +20,9 @@ type Card struct {
 	cost int
 	kind []*Kind
 	coin int
-	n int
+	vp int
 	supply int
+	act func(*Game)
 }
 
 func PanickyAtoi(s string) int {
@@ -80,6 +81,8 @@ type Game struct {
 	suplist Pile
 	ch chan Command
 	phase int
+	stack []*Frame
+	trash Pile
 }
 
 const (
@@ -87,6 +90,103 @@ const (
 	phBuy
 	phCleanup
 )
+
+func (game *Game) play(k int) {
+	p := game.NowPlaying()
+	c := p.hand[k]
+	p.hand = append(p.hand[:k], p.hand[k+1:]...)
+	p.played = append(p.played, c)
+	if c.HasKind(kAction) {
+		p.a--
+	}
+	fmt.Printf("%v plays %v\n", p.name, c.name)
+	if c.act == nil {
+		fmt.Printf("unimplemented  :(\n")
+		return
+	}
+	c.act(game)
+}
+
+func (game Game) addCoins(n int) {
+	game.NowPlaying().c += n
+}
+
+func (game *Game) Push(f *Frame) {
+	game.stack = append(game.stack, f)
+}
+
+func (game *Game) HasStack() bool {
+	return len(game.stack) > 0
+}
+
+func (game *Game) StackTop() *Frame {
+	return game.stack[len(game.stack)-1]
+}
+
+func (game *Game) Pop() *Frame {
+	f := game.StackTop()
+	game.stack = game.stack[:len(game.stack)-1]
+	return f
+}
+
+func (game *Game) NowPlaying() *Player {
+	return game.players[game.n]
+}
+
+func (game *Game) chapel() {
+	p := game.NowPlaying()
+	c := p.played[len(p.played)-1]
+	game.Push(&Frame{game:game, card:c, n:4})
+}
+
+type Frame struct {
+	game *Game
+	card *Card
+	n int
+	selected []bool
+}
+
+func (f *Frame) CanPick(choice *Card) string {
+	p := f.game.NowPlaying()
+	for i, c := range p.hand {
+		if f.selected != nil && f.selected[i] {
+			continue
+		}
+		if c == choice {
+			return ""
+		}
+	}
+	return "invalid selection"
+}
+
+func (f *Frame) pick(choice *Card) string {
+	p := f.game.NowPlaying()
+	if f.selected == nil {
+		f.selected = make([]bool, len(p.hand))
+	}
+	for i, c := range p.hand {
+		if f.selected[i] {
+			continue
+		}
+		if c == choice {
+			f.selected[i] = true
+			f.n--
+			return ""
+		}
+	}
+	return "invalid selection"
+}
+
+func (f *Frame) trash() {
+	p := f.game.NowPlaying()
+	for i := len(p.hand)-1; i >= 0; i-- {
+		if f.selected[i] {
+			fmt.Printf("%v trashes %v\n", p.name, p.hand[i].name)
+			f.game.trash = append(f.game.trash, p.hand[i])
+			p.hand = append(p.hand[:i], p.hand[i+1:]...)
+		}
+	}
+}
 
 type Command struct {
 	s string
@@ -120,14 +220,6 @@ func (p *Player) draw(n int) {
 	p.draw(n-1)
 }
 
-func (p *Player) play(k int) {
-	c := p.hand[k]
-	p.c += c.n
-	p.hand = append(p.hand[:k], p.hand[k+1:]...)
-	p.played = append(p.played, c)
-	fmt.Printf("%v plays %v\n", p.name, c.name)
-}
-
 func (p *Player) cleanup() {
 	p.discard, p.played = append(p.discard, p.played...), nil
 	p.discard, p.hand = append(p.discard, p.hand...), nil
@@ -148,6 +240,9 @@ func CanPlay(game *Game, c *Card) string {
 			if game.phase != phAction {
 				return "wrong phase"
 			}
+			if game.NowPlaying().a == 0 {
+				return "out of actions"
+			}
 		case c.HasKind(kTreasure):
 			if game.phase != phBuy {
 				return "wrong phase"
@@ -159,7 +254,7 @@ func CanPlay(game *Game, c *Card) string {
 }
 
 func CanBuy(game *Game, c *Card) string {
-	p := game.players[game.n]
+	p := game.NowPlaying()
 	switch {
 		case game.phase != phBuy:
 			return "wrong phase"
@@ -187,11 +282,12 @@ func main() {
 Copper,0,Treasure,$1
 Silver,3,Treasure,$2
 Gold,6,Treasure,$3
-Estate,2,Victory,V1
-Duchy,5,Victory,V3
-Province,8,Victory,V6
-Curse,0,Curse,C1
-Chapel,2,Action
+Estate,2,Victory,#1
+Duchy,5,Victory,#3
+Province,8,Victory,#6
+Curse,0,Curse,#-1
+
+Chapel,2,Action,chapel
 `
 	for _, s := range strings.Split(db, "\n") {
 		if len(s) == 0 {
@@ -221,11 +317,11 @@ Chapel,2,Action
 			s := a[i]
 			switch s[0] {
 			case '$':
-				c.n = PanickyAtoi(s[1:])
-			case 'V':
-				c.n = PanickyAtoi(s[1:])
-			case 'C':
-				c.n = -PanickyAtoi(s[1:])
+				c.act = func(game *Game) { game.addCoins(PanickyAtoi(s[1:])) }
+			case '#':
+				c.vp = PanickyAtoi(s[1:])
+			default:
+				c.act = func(game *Game) { game.chapel() }
 			}
 		}
 	}
@@ -301,9 +397,9 @@ Chapel,2,Action
 				if c.HasKind(kVictory) || c.HasKind(kCurse) {
 					v := m[c]
 					v.count++
-					v.pts += c.n
+					v.pts += c.vp
 					m[c] = v
-					score += c.n
+					score += c.vp
 				}
 			}
 			fmt.Printf("%v: %v\n", p.name, score)
@@ -317,12 +413,35 @@ Chapel,2,Action
 	}
 
 	for game.n = 0;; game.n = (game.n+1) % len(players) {
-		p := players[game.n]
+		p := game.NowPlaying()
 		p.a, p.b, p.c = 1, 1, 0
 		fmt.Printf("%v to play\n", p.name)
 		for game.phase = phAction; game.phase <= phCleanup; {
 			p.ch <- game
 			cmd := <-game.ch
+			if cmd.s == "quit" {
+				p.cleanup()
+				gameOver()
+				return
+			}
+			if game.HasStack() {
+				f := game.StackTop()
+				switch cmd.s {
+					case "pick":
+						if msg := f.pick(cmd.c); msg != "" {
+							panic(msg)
+						}
+						if f.n == 0 {
+							f.trash()
+							game.Pop()
+						}
+					case "done":
+						f.trash()
+						game.Pop()
+					default:
+						panic(cmd.s)
+				}
+			}
 			switch cmd.s {
 				case "buy":
 					choice := cmd.c
@@ -342,7 +461,7 @@ Chapel,2,Action
 					var k int
 					for k = len(p.hand)-1; k >= 0; k-- {
 						if p.hand[k] == cmd.c {
-							p.play(k)
+							game.play(k)
 							break
 						}
 					}
@@ -351,10 +470,6 @@ Chapel,2,Action
 					}
 				case "next":
 					game.phase++
-				case "quit":
-					p.cleanup()
-					gameOver()
-					return
 			}
 		}
 		fmt.Printf("%v Cleanup phase\n", p.name)
@@ -419,44 +534,48 @@ func (consoleGamer) start(ch chan *Game) {
 	i := 0
 	prog := ""
 	newTurn := true
-	allTreasures := false
+	wildCard := false
 	for {
 		game = <-ch
-		p := game.players[game.n]
+		p := game.NowPlaying()
 		if newTurn {
 			dump(p)
 			newTurn = false
 		}
 		game.ch <- func() Command {
-			if game.phase == phCleanup {
-				newTurn = true
-				return Command{"next", nil}
-			}
-			if game.phase == phAction {
-				if func() bool {
-					for _, c := range p.hand {
-						if c.HasKind(kAction) {
-							return false
+			// Automatically advance to next phase when it's obvious.
+			if !game.HasStack() {
+				if game.phase == phCleanup {
+					newTurn = true
+					return Command{"next", nil}
+				}
+				if game.phase == phAction {
+					if p.a == 0 || func() bool {
+						for _, c := range p.hand {
+							if c.HasKind(kAction) {
+								return false
+							}
 						}
+						return true
+					}() {
+						return Command{"next", nil}
 					}
-					return true
-				}() {
-					fmt.Printf("[no action cards; advancing to Buy phase]\n")
+				}
+				if p.b == 0 {
 					return Command{"next", nil}
 				}
 			}
-			if p.b == 0 {
-				return Command{"next", nil}
-			}
 			for {
-				if allTreasures {
+				// TODO: Change this to modify 'prog' (by inserting all treasure
+				// cards) when first encountered.
+				if wildCard {
 					for k := len(p.hand)-1; k >= 0; k-- {
 						if p.hand[k].HasKind(kTreasure) {
 							return Command{"play", p.hand[k]}
 						}
 					}
 				}
-				allTreasures = false
+				wildCard = false
 				i++
 				for i >= len(prog) {
 					fmt.Printf("a:%v b:%v c:%v> ", p.a, p.b, p.c)
@@ -470,10 +589,38 @@ func (consoleGamer) start(ch chan *Game) {
 					}
 					prog, i = s, 0
 				}
-				msg := ""
+				match := true
 				switch prog[i] {
 				case '\n':
 				case ' ':
+				case '?':
+					dump(p)
+				default:
+					match = false
+				}
+				if (match) {
+					continue
+				}
+				msg := ""
+				if game.HasStack() {
+					f := game.StackTop()
+					if prog[i] == '/' {
+						return Command{"done", nil}
+					}
+					c := keyToCard(prog[i])
+					if c == nil {
+						msg = "unrecognized card"
+						break
+					}
+					if msg = f.CanPick(c); msg == "" {
+						return Command{"pick", c}
+					}
+					if msg != "" {
+						fmt.Printf("TODO: refactor message printing. BTW %v\n", msg)
+					}
+					continue
+				}
+				switch prog[i] {
 				case '+': fallthrough
 				case ';':
 					i++
@@ -490,8 +637,6 @@ func (consoleGamer) start(ch chan *Game) {
 						break
 					}
 					return Command{"buy", choice}
-				case '?':
-					dump(p)
 				case '.':
 					return Command{"next", nil}
 				case '*':
@@ -499,7 +644,7 @@ func (consoleGamer) start(ch chan *Game) {
 						msg = "wrong phase"
 						break
 					}
-					allTreasures = true
+					wildCard = true
 				default:
 					c := keyToCard(prog[i])
 					if c == nil {
@@ -546,7 +691,7 @@ func (this simpleBuyer) start(ch chan *Game) {
 			if game.phase == phCleanup {
 				return Command{"next", nil}
 			}
-			p := game.players[game.n]
+			p := game.NowPlaying()
 			if p.b == 0 {
 				return Command{"next", nil}
 			}
