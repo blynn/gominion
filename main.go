@@ -32,7 +32,7 @@ func PanickyAtoi(s string) int {
 	return n
 }
 
-func (c *Card) HasKind(k *Kind) bool {
+func (c Card) HasKind(k *Kind) bool {
 	for _, v := range c.kind {
 		if v == k {
 			return true
@@ -48,6 +48,14 @@ var (
 	CardDict = make(map[string]*Card)
 	kTreasure, kVictory, kCurse *Kind
 )
+
+func GetCard(s string) *Card {
+	c, ok := CardDict[s]
+	if !ok {
+		panic("unknown card: " + s)
+	}
+	return c
+}
 
 func (deck Pile) shuffle() {
 	if len(deck) < 1 {
@@ -79,9 +87,13 @@ type Command struct {
 	c *Card
 }
 
+type PlayFun interface {
+	start(chan *Game)
+}
+
 type Player struct {
 	name string
-	fun func(chan *Game)
+	fun PlayFun
 	a, b, c int
 	deck, hand, played, discard Pile
 	ch chan *Game
@@ -137,7 +149,7 @@ func CanBuy(p *Player, c *Card) string {
 }
 
 func main() {
-	rand.Seed(2)
+	rand.Seed(60)
 	for _, s := range []string{"Treasure", "Victory", "Curse"} {
 		KindDict[s] = &Kind{s}
 	}
@@ -195,8 +207,8 @@ Curse,0,Curse,C1
 
 	game := &Game{ch: make(chan Command)}
 	game.players = []*Player{
-		&Player{name:"Ben", fun:consoleGamer},
-		&Player{name:"AI", fun:consoleGamer},
+		&Player{name:"Ben", fun:consoleGamer{}},
+		&Player{name:"AI", fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
 	}
 	players := game.players
 
@@ -233,13 +245,10 @@ Curse,0,Curse,C1
 		p.deck.shuffle()
 		p.draw(5)
 		p.ch = make(chan *Game)
-		go p.fun(p.ch)
+		go p.fun.start(p.ch)
 	}
 	layout := func(s string, key byte) {
-		c, ok := CardDict[s]
-		if !ok {
-			panic("unknown card: " + s)
-		}
+		c := GetCard(s)
 		game.suplist = append(game.suplist, c)
 		c.key = key
 	}
@@ -340,7 +349,9 @@ Curse,0,Curse,C1
 	}
 }
 
-func consoleGamer(ch chan *Game) {
+type consoleGamer struct {}
+
+func (consoleGamer) start(ch chan *Game) {
 	reader := bufio.NewReader(os.Stdin)
 	var game *Game
 	keyToCard := func(key byte) *Card {
@@ -462,6 +473,31 @@ func consoleGamer(ch chan *Game) {
 				}
 			}
 			panic("unreachable")
+		}()
+	}
+}
+
+type simpleBuyer struct {
+	list []string
+}
+
+func (this simpleBuyer) start(ch chan *Game) {
+	for {
+		game := <-ch
+		game.ch<- func() Command {
+			p := game.players[game.n]
+			for k := len(p.hand)-1; k >= 0; k-- {
+				if p.hand[k].HasKind(kTreasure) {
+					return Command{"play", p.hand[k]}
+				}
+			}
+			for _, s := range this.list {
+				c := GetCard(s)
+				if p.c >= c.cost {
+					return Command{"buy", c}
+				}
+			}
+			return Command{"next", nil}
 		}()
 	}
 }
