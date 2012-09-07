@@ -46,7 +46,7 @@ type Pile []*Card
 var (
 	KindDict = make(map[string]*Kind)
 	CardDict = make(map[string]*Card)
-	kTreasure, kVictory, kCurse *Kind
+	kTreasure, kVictory, kCurse, kAction *Kind
 )
 
 func GetCard(s string) *Card {
@@ -79,8 +79,14 @@ type Game struct {
 	n int  // Index of current player.
 	suplist Pile
 	ch chan Command
-	newTurn bool
+	phase int
 }
+
+const (
+	phAction = iota
+	phBuy
+	phCleanup
+)
 
 type Command struct {
 	s string
@@ -136,8 +142,27 @@ func getKind(s string) *Kind {
 	return k
 }
 
-func CanBuy(p *Player, c *Card) string {
+func CanPlay(game *Game, c *Card) string {
 	switch {
+		case c.HasKind(kAction):
+			if game.phase != phAction {
+				return "wrong phase"
+			}
+		case c.HasKind(kTreasure):
+			if game.phase != phBuy {
+				return "wrong phase"
+			}
+		default:
+				return "unplayable card"
+	}
+	return ""
+}
+
+func CanBuy(game *Game, c *Card) string {
+	p := game.players[game.n]
+	switch {
+		case game.phase != phBuy:
+			return "wrong phase"
 		case p.b == 0:
 			return "no buys left"
 		case c.cost > p.c:
@@ -150,12 +175,13 @@ func CanBuy(p *Player, c *Card) string {
 
 func main() {
 	rand.Seed(60)
-	for _, s := range []string{"Treasure", "Victory", "Curse"} {
+	for _, s := range []string{"Treasure", "Victory", "Curse", "Action"} {
 		KindDict[s] = &Kind{s}
 	}
 	kTreasure = getKind("Treasure")
 	kVictory = getKind("Victory")
 	kCurse = getKind("Curse")
+	kAction = getKind("Action")
 
 	db := `
 Copper,0,Treasure,$1
@@ -165,6 +191,7 @@ Estate,2,Victory,V1
 Duchy,5,Victory,V3
 Province,8,Victory,V6
 Curse,0,Curse,C1
+Chapel,2,Action
 `
 	for _, s := range strings.Split(db, "\n") {
 		if len(s) == 0 {
@@ -259,6 +286,8 @@ Curse,0,Curse,C1
 	layout("Duchy", 'w')
 	layout("Province", 'e')
 	layout("Curse", '!')
+	setSupply("Chapel", 10)
+	layout("Chapel", 'a')
 	gameOver := func() {
 		fmt.Printf("Game over\n")
 		for _, p := range players {
@@ -290,17 +319,15 @@ Curse,0,Curse,C1
 	for game.n = 0;; game.n = (game.n+1) % len(players) {
 		p := players[game.n]
 		p.a, p.b, p.c = 1, 1, 0
-		fmt.Printf("%v to move\n", p.name)
-		game.newTurn = true
-		for p.b > 0 {
+		fmt.Printf("%v to play\n", p.name)
+		for game.phase = phAction; game.phase <= phCleanup; {
 			p.ch <- game
 			cmd := <-game.ch
-			game.newTurn = false
 			switch cmd.s {
 				case "buy":
 					choice := cmd.c
-					if CanBuy(p, choice) != "" {
-						panic(CanBuy(p, choice))
+					if err := CanBuy(game, choice); err != "" {
+						panic(err)
 					}
 					fmt.Printf("%v spends %v coins\n", p.name, choice.cost)
 					fmt.Printf("%v gains %v\n", p.name, choice.name)
@@ -309,6 +336,9 @@ Curse,0,Curse,C1
 					p.c -= choice.cost
 					p.b--
 				case "play":
+					if err := CanPlay(game, cmd.c); err != "" {
+						panic(err)
+					}
 					var k int
 					for k = len(p.hand)-1; k >= 0; k-- {
 						if p.hand[k] == cmd.c {
@@ -320,14 +350,14 @@ Curse,0,Curse,C1
 						panic("unplayable")
 					}
 				case "next":
-					p.b = 0
+					game.phase++
 				case "quit":
 					p.cleanup()
 					gameOver()
 					return
 			}
 		}
-		fmt.Println("Cleaning up...")
+		fmt.Printf("%v Cleanup phase\n", p.name)
 		p.cleanup()
 		n := 0
 		for _, c := range game.suplist {
@@ -388,14 +418,36 @@ func (consoleGamer) start(ch chan *Game) {
 	}
 	i := 0
 	prog := ""
+	newTurn := true
 	allTreasures := false
 	for {
 		game = <-ch
 		p := game.players[game.n]
-		if game.newTurn {
+		if newTurn {
 			dump(p)
+			newTurn = false
 		}
 		game.ch <- func() Command {
+			if game.phase == phCleanup {
+				newTurn = true
+				return Command{"next", nil}
+			}
+			if game.phase == phAction {
+				if func() bool {
+					for _, c := range p.hand {
+						if c.HasKind(kAction) {
+							return false
+						}
+					}
+					return true
+				}() {
+					fmt.Printf("[no action cards; advancing to Buy phase]\n")
+					return Command{"next", nil}
+				}
+			}
+			if p.b == 0 {
+				return Command{"next", nil}
+			}
 			for {
 				if allTreasures {
 					for k := len(p.hand)-1; k >= 0; k-- {
@@ -411,7 +463,6 @@ func (consoleGamer) start(ch chan *Game) {
 					s, err := reader.ReadString('\n')
 					if err == io.EOF {
 						fmt.Printf("\nQuitting game...\n")
-						p.cleanup()
 						return Command{"quit", nil}
 					}
 					if err != nil {
@@ -423,7 +474,8 @@ func (consoleGamer) start(ch chan *Game) {
 				switch prog[i] {
 				case '\n':
 				case ' ':
-				case '+':
+				case '+': fallthrough
+				case ';':
 					i++
 					if i == len(prog) {
 						msg = "expected card"
@@ -434,15 +486,19 @@ func (consoleGamer) start(ch chan *Game) {
 						msg = "no such card"
 						break
 					}
-					msg = CanBuy(p, choice)
-					if msg == "" {
-						return Command{"buy", choice}
+					if msg = CanBuy(game, choice); msg != "" {
+						break
 					}
+					return Command{"buy", choice}
 				case '?':
 					dump(p)
 				case '.':
 					return Command{"next", nil}
 				case '*':
+					if game.phase != phBuy {
+						msg = "wrong phase"
+						break
+					}
 					allTreasures = true
 				default:
 					c := keyToCard(prog[i])
@@ -450,8 +506,7 @@ func (consoleGamer) start(ch chan *Game) {
 						msg = "unrecognized command"
 						break
 					}
-					if !c.HasKind(kTreasure) {
-						msg = "treasure expected"
+					if msg = CanPlay(game, c); msg != "" {
 						break
 					}
 					var k int
@@ -485,7 +540,16 @@ func (this simpleBuyer) start(ch chan *Game) {
 	for {
 		game := <-ch
 		game.ch<- func() Command {
+			if game.phase == phAction {
+				return Command{"next", nil}
+			}
+			if game.phase == phCleanup {
+				return Command{"next", nil}
+			}
 			p := game.players[game.n]
+			if p.b == 0 {
+				return Command{"next", nil}
+			}
 			for k := len(p.hand)-1; k >= 0; k-- {
 				if p.hand[k].HasKind(kTreasure) {
 					return Command{"play", p.hand[k]}
