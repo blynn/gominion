@@ -141,7 +141,11 @@ func (game *Game) HasStack() bool {
 }
 
 func (game *Game) StackTop() *Frame {
-	return game.stack[len(game.stack)-1]
+	n := len(game.stack)
+	if n == 0 {
+		return nil
+	}
+	return game.stack[n-1]
 }
 
 func (game *Game) Pop() {
@@ -158,8 +162,10 @@ type Frame struct {
 	fun func(*Frame)
 	game *Game
 	card *Card
+	exec func(*Frame, *Command) (bool, string)
 	n int
 	selected []bool
+	choice *Card
 }
 
 func (f *Frame) CanPick(choice *Card) string {
@@ -274,6 +280,30 @@ func CanBuy(game *Game, c *Card) string {
 	return ""
 }
 
+func pickHand(f *Frame, cmd *Command) (bool, string) {
+	switch cmd.s {
+		case "pick":
+			if msg := f.pick(cmd.c); msg != "" {
+				return false, msg
+			}
+			return f.n == 0, ""
+		case "done":
+			return true, ""
+	}
+	return false, "bad command: " + cmd.s
+}
+
+func pickSupply(f *Frame, cmd *Command) (bool, string) {
+	if cmd.s == "pick" {
+		if cmd.c.cost > f.n || cmd.c.supply == 0 {
+			return false, "read the card"
+		}
+		f.choice = cmd.c
+		return true, ""
+	}
+	return false, "bad command: " + cmd.s
+}
+
 func main() {
 	rand.Seed(60)
 	for _, s := range []string{"Treasure", "Victory", "Curse", "Action"} {
@@ -296,6 +326,7 @@ Cellar,2,Action,+A1,cellar
 Chapel,2,Action,chapel
 Village,3,Action,+C1,+A2
 Woodcutter,3,Action,+B1,$2
+Workshop,3,Action,workshop
 Smithy,4,Action,+C3
 Festival,5,Action,+A2,+B1,$2
 Laboratory,5,Action,+C2,+A1
@@ -357,7 +388,7 @@ fun := func(f *Frame) {
 		}
 	}
 }
-game.Push(&Frame{fun:fun, n:len(p.hand)})
+game.Push(&Frame{fun:fun, exec:pickHand, n:len(p.hand)})
 						 })
 				case "chapel":
 					c.AddEffect(func(game *Game) {
@@ -372,7 +403,17 @@ fun := func(f *Frame) {
 	}
 }
 
-game.Push(&Frame{fun:fun, n:4})
+game.Push(&Frame{fun:fun, exec:pickHand, n:4})
+						 })
+				case "workshop":
+					c.AddEffect(func(game *Game) {
+fun := func(f *Frame) {
+	p := game.NowPlaying()
+	fmt.Printf("%v gains %v\n", p.name, f.choice.name)
+	p.discard = append(p.discard, f.choice)
+	f.choice.supply--
+}
+game.Push(&Frame{fun:fun, exec:pickSupply, n:4})
 						 })
 				default:
 					panic(s)
@@ -438,7 +479,7 @@ game.Push(&Frame{fun:fun, n:4})
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Cellar,Chapel,Village,Woodcutter,Smithy,Festival,Laboratory,Market", ",") {
+	for i, s := range strings.Split("Cellar,Chapel,Village,Woodcutter,Workshop,Smithy,Festival,Laboratory,Market", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
@@ -482,20 +523,13 @@ game.Push(&Frame{fun:fun, n:4})
 				gameOver()
 				return
 			}
-			if game.HasStack() {
-				f := game.StackTop()
-				switch cmd.s {
-					case "pick":
-						if msg := f.pick(cmd.c); msg != "" {
-							panic(msg)
-						}
-						if f.n == 0 {
-							game.Pop()
-						}
-					case "done":
-						game.Pop()
-					default:
-						panic(cmd.s)
+			if f := game.StackTop(); f != nil {
+				done, msg := f.exec(f, &cmd)
+				if msg != "" {
+					panic(msg)
+				}
+				if done {
+					game.Pop()
 				}
 			}
 			switch cmd.s {
@@ -658,17 +692,33 @@ func (consoleGamer) start(ch chan *Game) {
 					continue
 				}
 				msg := ""
-				if game.HasStack() {
-					f := game.StackTop()
-					if prog[i] == '/' {
-						return Command{"done", nil}
-					}
-					c := keyToCard(prog[i])
-					if c == nil {
-						msg = "unrecognized card"
-						break
-					}
-					if msg = f.CanPick(c); msg == "" {
+				if f := game.StackTop(); f != nil {
+					if f.card == GetCard("Chapel") || f.card == GetCard("Cellar") {
+						if prog[i] == '/' {
+							return Command{"done", nil}
+						}
+						c := keyToCard(prog[i])
+						if c == nil {
+							msg = "unrecognized card"
+							break
+						}
+						if msg = f.CanPick(c); msg == "" {
+							return Command{"pick", c}
+						}
+					} else if f.card == GetCard("Workshop") {
+						c := keyToCard(prog[i])
+						if c == nil {
+							msg = "expected card"
+							break
+						}
+						if c.cost > f.n {
+							msg = "too expensive"
+							break
+						}
+						if c.supply == 0 {
+							msg = "supply exhausted"
+							break
+						}
 						return Command{"pick", c}
 					}
 					if msg != "" {
