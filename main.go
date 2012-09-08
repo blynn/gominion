@@ -130,6 +130,9 @@ func (game Game) addCards(n int) {
 }
 
 func (game *Game) Push(f *Frame) {
+	f.game = game
+	p := game.NowPlaying()
+	f.card = p.played[len(p.played)-1]
 	game.stack = append(game.stack, f)
 }
 
@@ -141,23 +144,18 @@ func (game *Game) StackTop() *Frame {
 	return game.stack[len(game.stack)-1]
 }
 
-func (game *Game) Pop() *Frame {
+func (game *Game) Pop() {
 	f := game.StackTop()
 	game.stack = game.stack[:len(game.stack)-1]
-	return f
+	f.fun(f)
 }
 
 func (game *Game) NowPlaying() *Player {
 	return game.players[game.n]
 }
 
-func (game *Game) chapel() {
-	p := game.NowPlaying()
-	c := p.played[len(p.played)-1]
-	game.Push(&Frame{game:game, card:c, n:4})
-}
-
 type Frame struct {
+	fun func(*Frame)
 	game *Game
 	card *Card
 	n int
@@ -195,17 +193,6 @@ func (f *Frame) pick(choice *Card) string {
 	return "invalid selection"
 }
 
-func (f *Frame) trash() {
-	p := f.game.NowPlaying()
-	for i := len(p.hand)-1; i >= 0; i-- {
-		if f.selected[i] {
-			fmt.Printf("%v trashes %v\n", p.name, p.hand[i].name)
-			f.game.trash = append(f.game.trash, p.hand[i])
-			p.hand = append(p.hand[:i], p.hand[i+1:]...)
-		}
-	}
-}
-
 type Command struct {
 	s string
 	c *Card
@@ -234,6 +221,7 @@ func (p *Player) draw(n int) {
 		p.deck, p.discard = p.discard, p.deck
 		p.deck.shuffle()
 	}
+	fmt.Printf("%v draws %v\n", p.name, p.deck[0].name)
 	p.hand, p.deck = append(p.hand, p.deck[0]), p.deck[1:]
 	p.draw(n-1)
 }
@@ -304,6 +292,7 @@ Duchy,5,Victory,#3
 Province,8,Victory,#6
 Curse,0,Curse,#-1
 
+Cellar,2,Action,+A1,cellar
 Chapel,2,Action,chapel
 Village,3,Action,+C1,+A2
 Woodcutter,3,Action,+B1,$2
@@ -354,9 +343,38 @@ Market,5,Action,+C1,+A1,+B1,$1
 						panic(s)
 				}
 			default:
-				if s == "chapel" {
-					c.AddEffect(func(game *Game) { game.chapel() })
-				} else {
+				switch s {
+				case "cellar":
+					c.AddEffect(func(game *Game) {
+p := game.NowPlaying()
+fun := func(f *Frame) {
+	for i := len(p.hand)-1; i >= 0; i-- {
+		if f.selected[i] {
+			fmt.Printf("%v discards %v\n", p.name, p.hand[i].name)
+			p.discard = append(p.discard, p.hand[i])
+			p.hand = append(p.hand[:i], p.hand[i+1:]...)
+			p.draw(1)
+		}
+	}
+}
+game.Push(&Frame{fun:fun, n:len(p.hand)})
+						 })
+				case "chapel":
+					c.AddEffect(func(game *Game) {
+fun := func(f *Frame) {
+	p := game.NowPlaying()
+	for i := len(p.hand)-1; i >= 0; i-- {
+		if f.selected[i] {
+			fmt.Printf("%v trashes %v\n", p.name, p.hand[i].name)
+			game.trash = append(game.trash, p.hand[i])
+			p.hand = append(p.hand[:i], p.hand[i+1:]...)
+		}
+	}
+}
+
+game.Push(&Frame{fun:fun, n:4})
+						 })
+				default:
 					panic(s)
 				}
 			}
@@ -420,7 +438,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Chapel,Village,Woodcutter,Smithy,Festival,Laboratory,Market", ",") {
+	for i, s := range strings.Split("Cellar,Chapel,Village,Woodcutter,Smithy,Festival,Laboratory,Market", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
@@ -472,11 +490,9 @@ Market,5,Action,+C1,+A1,+B1,$1
 							panic(msg)
 						}
 						if f.n == 0 {
-							f.trash()
 							game.Pop()
 						}
 					case "done":
-						f.trash()
 						game.Pop()
 					default:
 						panic(cmd.s)
