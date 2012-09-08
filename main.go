@@ -22,7 +22,7 @@ type Card struct {
 	coin int
 	vp int
 	supply int
-	act func(*Game)
+	act []func(*Game)
 }
 
 func PanickyAtoi(s string) int {
@@ -33,13 +33,17 @@ func PanickyAtoi(s string) int {
 	return n
 }
 
-func (c Card) HasKind(k *Kind) bool {
+func (c *Card) HasKind(k *Kind) bool {
 	for _, v := range c.kind {
 		if v == k {
 			return true
 		}
 	}
 	return false
+}
+
+func (c *Card) AddEffect(fun func(game *Game)) {
+	c.act = append(c.act, fun)
 }
 
 type Pile []*Card
@@ -104,11 +108,25 @@ func (game *Game) play(k int) {
 		fmt.Printf("unimplemented  :(\n")
 		return
 	}
-	c.act(game)
+	for _, f := range c.act {
+		f(game)
+	}
 }
 
 func (game Game) addCoins(n int) {
 	game.NowPlaying().c += n
+}
+
+func (game Game) addActions(n int) {
+	game.NowPlaying().a += n
+}
+
+func (game Game) addBuys(n int) {
+	game.NowPlaying().b += n
+}
+
+func (game Game) addCards(n int) {
+	game.NowPlaying().draw(n)
 }
 
 func (game *Game) Push(f *Frame) {
@@ -277,8 +295,7 @@ func main() {
 	kVictory = getKind("Victory")
 	kCurse = getKind("Curse")
 	kAction = getKind("Action")
-
-	db := `
+	for _, s := range strings.Split(`
 Copper,0,Treasure,$1
 Silver,3,Treasure,$2
 Gold,6,Treasure,$3
@@ -288,8 +305,13 @@ Province,8,Victory,#6
 Curse,0,Curse,#-1
 
 Chapel,2,Action,chapel
-`
-	for _, s := range strings.Split(db, "\n") {
+Village,3,Action,+C1,+A2
+Woodcutter,3,Action,+B1,$2
+Smithy,4,Action,+C3
+Festival,5,Action,+A2,+B1,$2
+Laboratory,5,Action,+C2,+A1
+Market,5,Action,+C1,+A1,+B1,$1
+`, "\n") {
 		if len(s) == 0 {
 			continue
 		}
@@ -317,11 +339,26 @@ Chapel,2,Action,chapel
 			s := a[i]
 			switch s[0] {
 			case '$':
-				c.act = func(game *Game) { game.addCoins(PanickyAtoi(s[1:])) }
+				c.AddEffect(func(game *Game) { game.addCoins(PanickyAtoi(s[1:])) })
 			case '#':
 				c.vp = PanickyAtoi(s[1:])
+			case '+':
+				switch s[1] {
+					case 'A':
+						c.AddEffect(func(game *Game) { game.addActions(PanickyAtoi(s[2:])) })
+					case 'B':
+						c.AddEffect(func(game *Game) { game.addBuys(PanickyAtoi(s[2:])) })
+					case 'C':
+						c.AddEffect(func(game *Game) { game.addCards(PanickyAtoi(s[2:])) })
+					default:
+						panic(s)
+				}
 			default:
-				c.act = func(game *Game) { game.chapel() }
+				if s == "chapel" {
+					c.AddEffect(func(game *Game) { game.chapel() })
+				} else {
+					panic(s)
+				}
 			}
 		}
 	}
@@ -382,8 +419,11 @@ Chapel,2,Action,chapel
 	layout("Duchy", 'w')
 	layout("Province", 'e')
 	layout("Curse", '!')
-	setSupply("Chapel", 10)
-	layout("Chapel", 'a')
+	keys := "asdfgzxcvb"
+	for i, s := range strings.Split("Chapel,Village,Woodcutter,Smithy,Festival,Laboratory,Market", ",") {
+		setSupply(s, 10)
+		layout(s, keys[i])
+	}
 	gameOver := func() {
 		fmt.Printf("Game over\n")
 		for _, p := range players {
