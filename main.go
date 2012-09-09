@@ -172,7 +172,7 @@ type Command struct {
 }
 
 type PlayFun interface {
-	start(chan *Game)
+	start(chan *Game, *Player)
 }
 
 type Player struct {
@@ -275,8 +275,7 @@ func (game *Game) Over() {
 	}
 }
 
-func (game *Game) getCommand() Command {
-	p := game.NowPlaying()
+func (game *Game) getCommand(p *Player) Command {
 	p.ch <- game
 	cmd := <-game.ch
 	if cmd.s == "quit" {
@@ -287,8 +286,7 @@ func (game *Game) getCommand() Command {
 	return cmd
 }
 
-func pickHand(game *Game, n int) []bool {
-	p := game.NowPlaying()
+func pickHand(game *Game, p *Player, n int, exact bool) []bool {
 	sel := make([]bool, len(p.hand))
 	game.SetParse(func(b byte) (Command, string) {
 		if b == '/' {
@@ -314,7 +312,7 @@ func pickHand(game *Game, n int) []bool {
 		return Command{"pick", choice}, ""
 	})
 	for stop := false; !stop; {
-		cmd := game.getCommand()
+		cmd := game.getCommand(p)
 		switch cmd.s {
 			case "pick":
 				found := false
@@ -331,6 +329,9 @@ func pickHand(game *Game, n int) []bool {
 				}
 				stop = n == 0
 			case "done":
+				if exact && n > 0 {
+					panic("must pick more")
+				}
 				stop = true
 			default:
 			  panic("bad command: " + cmd.s)
@@ -353,14 +354,14 @@ func pickGain(game *Game, max int) {
 		}
 		return Command{"pick", c}, ""
 	})
-	cmd := game.getCommand()
+	p := game.NowPlaying()
+	cmd := game.getCommand(p)
 	if cmd.s != "pick" {
 		panic("bad command: " + cmd.s)
 	}
 	if cmd.c.cost > max || cmd.c.supply == 0 {
 		panic("invalid choice")
 	}
-	p := game.NowPlaying()
 	fmt.Printf("%v gains %v\n", p.name, cmd.c.name)
 	p.discard = append(p.discard, cmd.c)
 	cmd.c.supply--
@@ -368,7 +369,7 @@ func pickGain(game *Game, max int) {
 
 func main() {
 	rand.Seed(60)
-	for _, s := range []string{"Treasure", "Victory", "Curse", "Action"} {
+	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack"} {
 		KindDict[s] = &Kind{s}
 	}
 	kTreasure = getKind("Treasure")
@@ -391,6 +392,7 @@ Village,3,Action,+C1,+A2
 Woodcutter,3,Action,+B1,$2
 Workshop,3,Action
 Feast,4,Action
+Militia,4,Action-Attack,$2
 Smithy,4,Action,+C3
 Festival,5,Action,+A2,+B1,$2
 Laboratory,5,Action,+C2,+A1
@@ -411,7 +413,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 			panic(s)
 		}
 		c := &Card{name:a[0], cost:cost}
-		for _, s := range strings.Split(a[2], ",") {
+		for _, s := range strings.Split(a[2], "-") {
 			kind, ok := KindDict[s]
 			if !ok {
 				panic("no such kind: " + a[2])
@@ -445,7 +447,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 		case "Cellar":
 			c.AddEffect(func(game *Game) {
 				p := game.NowPlaying()
-				selected := pickHand(game, len(p.hand))
+				selected := pickHand(game, p, len(p.hand), false)
 				for i := len(p.hand)-1; i >= 0; i-- {
 					if selected[i] {
 						fmt.Printf("%v discards %v\n", p.name, p.hand[i].name)
@@ -458,7 +460,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 		case "Chapel":
 			c.AddEffect(func(game *Game) {
 				p := game.NowPlaying()
-				selected := pickHand(game, 4)
+				selected := pickHand(game, p, 4, false)
 				for i := len(p.hand)-1; i >= 0; i-- {
 					if selected[i] {
 						fmt.Printf("%v trashes %v\n", p.name, p.hand[i].name)
@@ -478,10 +480,10 @@ Market,5,Action,+C1,+A1,+B1,$1
 					}
 					return Command{}, "\\ for yes, / for no"
 				})
-				cmd := game.getCommand()
+				p := game.NowPlaying()
+				cmd := game.getCommand(p)
 				switch cmd.s {
 				case "yes":
-					p := game.NowPlaying()
 					fmt.Printf("%v discards deck\n", p.name)
 					p.discard, p.deck = append(p.discard, p.deck...), nil
 				case "done":
@@ -498,6 +500,22 @@ Market,5,Action,+C1,+A1,+B1,$1
 			})
 		case "Workshop":
 			c.AddEffect(func(game *Game) { pickGain(game, 4) })
+		case "Militia":
+			c.AddEffect(func(game *Game) {
+				m := len(game.players)
+				for i := (game.n+1)%m; i != game.n; i = (i+1)%m {
+					other := game.players[i]
+					fmt.Printf("%v attacks %v\n", game.NowPlaying().name, other.name)
+					sel := pickHand(game, other, 3, true)
+					for i := len(other.hand)-1; i >= 0; i-- {
+						if !sel[i] {
+							fmt.Printf("%v discards %v\n", other.name, other.hand[i].name)
+							other.discard = append(other.discard, other.hand[i])
+							other.hand = append(other.hand[:i], other.hand[i+1:]...)
+						}
+					}
+				}
+			})
 		}
 	}
 
@@ -543,7 +561,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 		p.deck.shuffle()
 		p.draw(5)
 		p.ch = make(chan *Game)
-		go p.fun.start(p.ch)
+		go p.fun.start(p.ch, p)
 	}
 	layout := func(s string, key byte) {
 		c := GetCard(s)
@@ -558,7 +576,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Cellar,Chapel,Chancellor,Village,Woodcutter,Workshop,Feast,Smithy", ",") {
+	for i, s := range strings.Split("Cellar,Chapel,Chancellor,Village,Woodcutter,Workshop,Feast,Militia", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
@@ -568,7 +586,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 		p.a, p.b, p.c = 1, 1, 0
 		fmt.Printf("%v to play\n", p.name)
 		for game.phase = phAction; game.phase <= phCleanup; {
-			cmd := game.getCommand()
+			cmd := game.getCommand(p)
 			switch cmd.s {
 				case "buy":
 					choice := cmd.c
@@ -623,10 +641,10 @@ Market,5,Action,+C1,+A1,+B1,$1
 
 type consoleGamer struct {}
 
-func (consoleGamer) start(ch chan *Game) {
+func (consoleGamer) start(ch chan *Game, p *Player) {
 	reader := bufio.NewReader(os.Stdin)
 	var game *Game
-	dump := func(p *Player) {
+	dump := func() {
 		for _, c := range game.suplist {
 			fmt.Printf("[%c] %v(%v) $%v\n", c.key, c.name, c.supply, c.cost)
 		}
@@ -658,7 +676,7 @@ func (consoleGamer) start(ch chan *Game) {
 		game = <-ch
 		p := game.NowPlaying()
 		if newTurn {
-			dump(p)
+			dump()
 			newTurn = false
 		}
 		game.ch <- func() Command {
@@ -719,7 +737,7 @@ func (consoleGamer) start(ch chan *Game) {
 				case '\n':
 				case ' ':
 				case '?':
-					dump(p)
+					dump()
 				default:
 					match = false
 				}
@@ -796,9 +814,18 @@ type simpleBuyer struct {
 	list []string
 }
 
-func (this simpleBuyer) start(ch chan *Game) {
+func (this simpleBuyer) start(ch chan *Game, p *Player) {
 	for {
 		game := <-ch
+		if frame := game.StackTop(); frame != nil {
+			if frame.card.name == "Militia" {
+				// TODO: Better discard strategy.
+				for i := 0; i < 3; i++ {
+					game.ch <- Command{"pick", p.hand[i]}
+					game = <-ch
+				}
+			}
+		}
 		game.ch<- func() Command {
 			if game.phase == phAction {
 				return Command{"next", nil}
@@ -806,7 +833,6 @@ func (this simpleBuyer) start(ch chan *Game) {
 			if game.phase == phCleanup {
 				return Command{"next", nil}
 			}
-			p := game.NowPlaying()
 			if p.b == 0 {
 				return Command{"next", nil}
 			}
