@@ -100,7 +100,7 @@ func (game *Game) keyToCard(key byte) *Card {
 	return nil
 }
 
-func (game *Game) play(k int) {
+func (game *Game) multiplay(k int, n int) {
 	p := game.NowPlaying()
 	c := p.hand[k]
 	p.hand = append(p.hand[:k], p.hand[k+1:]...)
@@ -108,16 +108,22 @@ func (game *Game) play(k int) {
 	if c.HasKind(kAction) {
 		p.a--
 	}
-	fmt.Printf("%v plays %v\n", p.name, c.name)
-	if c.act == nil {
-		fmt.Printf("unimplemented  :(")
-		return
+	for ;n > 0; n-- {
+		fmt.Printf("%v plays %v\n", p.name, c.name)
+		if c.act == nil {
+			fmt.Printf("unimplemented  :(")
+			return
+		}
+		game.stack = append(game.stack, &Frame{card:c})
+		for _, f := range c.act {
+			f(game)
+		}
+		game.stack = game.stack[:len(game.stack)-1]
 	}
-	game.stack = append(game.stack, &Frame{card:c})
-	for _, f := range c.act {
-		f(game)
-	}
-	game.stack = game.stack[:len(game.stack)-1]
+}
+
+func (game *Game) play(k int) {
+	game.multiplay(k, 1)
 }
 
 func (game Game) addCoins(n int) {
@@ -421,7 +427,14 @@ func reacts(game *Game, p *Player) bool {
 	return false
 }
 
-func (game *Game) attack(fun func(other *Player)) {
+func (game *Game) ForOthers(fun func(*Player)) {
+	m := len(game.players)
+	for i := (game.n+1)%m; i != game.n; i = (i+1)%m {
+		fun(game.players[i])
+	}
+}
+
+func (game *Game) attack(fun func(*Player)) {
 	m := len(game.players)
 	for i := (game.n+1)%m; i != game.n; i = (i+1)%m {
 		other := game.players[i]
@@ -488,6 +501,8 @@ Remodel,4,Action
 Smithy,4,Action,+C3
 Spy,4,Action-Attack,+C1,+A1
 Thief,4,Action-Attack
+Throne Room,4,Action
+Council Room,5,Action,+C4,+B1
 Festival,5,Action,+A2,+B1,$2
 Laboratory,5,Action,+C2,+A1
 Market,5,Action,+C1,+A1,+B1,$1
@@ -613,6 +628,9 @@ Market,5,Action,+C1,+A1,+B1,$1
 		case "Militia":
 			add(func(game *Game) {
 				game.attack(func(other *Player) {
+					if len(other.hand) <= 3 {
+						return
+					}
 					sel := pickHand(game, other, 3, true, nil)
 					for i := len(other.hand)-1; i >= 0; i-- {
 						if !sel[i] {
@@ -647,17 +665,15 @@ Market,5,Action,+C1,+A1,+B1,$1
 					return
 				}
 				sel := pickHand(game, p, 1, true, nil)
-				max := 2
 				for i, c := range p.hand {
 					if sel[i] {
 						fmt.Printf("%v trashes %v\n", p.name, c.name)
-						max += c.cost
 						game.trash = append(game.trash, p.hand[i])
 						p.hand = append(p.hand[:i], p.hand[i+1:]...)
-						break
+						pickGain(game, c.cost + 2)
+						return
 					}
 				}
-				pickGain(game, max)
 			})
 		case "Spy":
 			add(func(game *Game) {
@@ -724,6 +740,31 @@ Market,5,Action,+C1,+A1,+B1,$1
 					}
 				})
 			})
+		case "Throne Room":
+			add(func(game *Game) {
+				p := game.NowPlaying()
+				isAction := func(c *Card) bool { return c.HasKind(kAction) }
+				if !inHand(p, isAction) {
+					return
+				}
+				sel := pickHand(game, p, 1, true, func(c *Card) string {
+					if !isAction(c) {
+						return "must pick Action"
+					}
+					return ""
+				})
+				for i, _ := range p.hand {
+					if sel[i] {
+						p.a++  // Compensate for Action deducted by multiplay().
+						game.multiplay(i, 2)
+						return
+					}
+				}
+			})
+		case "Council Room":
+			add(func(game *Game) {
+				game.ForOthers(func(other *Player) { other.draw(1) })
+			})
 		}
 	}
 
@@ -761,10 +802,12 @@ Market,5,Action,+C1,+A1,+B1,$1
 	setSupply("Curse", 10*(len(players) - 1))
 	for _, p := range players {
 		for i := 0; i < 3; i++ {
-			p.deck.Add("Estate")
+			p.deck.Add("Bureaucrat")
+			//p.deck.Add("Estate")
 		}
 		for i := 0; i < 7; i++ {
-			p.deck.Add("Copper")
+			p.deck.Add("Militia")
+			//p.deck.Add("Copper")
 		}
 		p.deck.shuffle()
 		p.draw(5)
@@ -784,7 +827,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Cellar,Moat,Village,Woodcutter,Workshop,Moneylender,Thief,Feast,Militia,Laboratory", ",") {
+	for i, s := range strings.Split("Cellar,Bureaucrat,Village,Workshop,Moneylender,Remodel,Throne Room,Militia,Laboratory", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
@@ -822,7 +865,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 					game.phase++
 			}
 		}
-		fmt.Printf("%v Cleanup phase\n", p.name)
+		fmt.Printf("%v cleans up\n", p.name)
 		p.cleanup()
 		n := 0
 		for _, c := range game.suplist {
@@ -1015,7 +1058,11 @@ type simpleBuyer struct {
 func (this simpleBuyer) start(ch chan *Game, p *Player) {
 	for {
 		game := <-ch
-		if frame := game.StackTop(); frame != nil {
+		for {
+			frame := game.StackTop()
+			if frame == nil {
+				break
+			}
 			switch frame.card.name {
 			case "Bureaucrat":
 				for _, c := range p.hand {
