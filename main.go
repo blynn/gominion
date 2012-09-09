@@ -369,7 +369,7 @@ func (game *Game) GainIfPossible(p *Player, c *Card) {
 	}
 }
 
-func pickGain(game *Game, max int) {
+func pickGainCond(game *Game, max int, fun func(*Card) string) {
 	game.SetParse(func(b byte) (Command, string) {
 		c := game.keyToCard(b)
 		if c == nil {
@@ -380,6 +380,9 @@ func pickGain(game *Game, max int) {
 		}
 		if c.supply == 0 {
 			return errCmd, "supply exhausted"
+		}
+		if msg := fun(c); msg != "" {
+			return errCmd, msg
 		}
 		return Command{"pick", c}, ""
 	})
@@ -392,6 +395,10 @@ func pickGain(game *Game, max int) {
 		panic("too expensive")
 	}
 	game.Gain(p, cmd.c)
+}
+
+func pickGain(game *Game, max int) {
+	pickGainCond(game, max, nil)
 }
 
 var errCmd Command
@@ -507,6 +514,8 @@ Festival,5,Action,+A2,+B1,$2
 Laboratory,5,Action,+C2,+A1
 Library,5,Action
 Market,5,Action,+C1,+A1,+B1,$1
+Mine,5,Action
+Witch,5,Action-Attack,+C2
 `, "\n") {
 		if len(s) == 0 {
 			continue
@@ -675,6 +684,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 						return
 					}
 				}
+				panic("unreachable")
 			})
 		case "Spy":
 			add(func(game *Game) {
@@ -788,6 +798,35 @@ Market,5,Action,+C1,+A1,+B1,$1
 				}
 				p.discard = append(p.discard, v...)
 			})
+		case "Mine":
+			add(func(game *Game) {
+				p := game.NowPlaying()
+				isTreasure := func(c *Card) bool { return c.HasKind(kTreasure) }
+				if !inHand(p, isTreasure) {
+					return
+				}
+				f := func(c *Card) string {
+					if !isTreasure(c) {
+						return "must pick Treasure"
+					}
+					return ""
+				}
+				sel := pickHand(game, p, 1, true, f)
+				for i, c := range p.hand {
+					if sel[i] {
+						fmt.Printf("%v trashes %v\n", p.name, c.name)
+						game.trash = append(game.trash, p.hand[i])
+						p.hand = append(p.hand[:i], p.hand[i+1:]...)
+						pickGainCond(game, c.cost + 3, f)
+						return
+					}
+				}
+				panic("unreachable")
+			})
+		case "Witch":
+			add(func(game *Game) {
+				game.ForOthers(func(other *Player) { game.GainIfPossible(other, GetCard("Curse")) })
+			})
 		}
 	}
 
@@ -848,7 +887,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Cellar,Bureaucrat,Village,Workshop,Moneylender,Remodel,Throne Room,Militia,Library", ",") {
+	for i, s := range strings.Split("Bureaucrat,Village,Moneylender,Remodel,Throne Room,Militia,Mine,Witch", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
