@@ -50,6 +50,10 @@ var (
 	kTreasure, kVictory, kCurse, kAction *Kind
 )
 
+func isVictory(c *Card) bool { return c.HasKind(kVictory) }
+func isTreasure(c *Card) bool { return c.HasKind(kTreasure) }
+func isAction(c *Card) bool { return c.HasKind(kAction) }
+
 func GetCard(s string) *Card {
 	c, ok := CardDict[s]
 	if !ok {
@@ -105,7 +109,7 @@ func (game *Game) multiplay(k int, n int) {
 	c := p.hand[k]
 	p.hand = append(p.hand[:k], p.hand[k+1:]...)
 	p.played = append(p.played, c)
-	if c.HasKind(kAction) {
+	if isAction(c) {
 		p.a--
 	}
 	for ;n > 0; n-- {
@@ -220,14 +224,14 @@ func getKind(s string) *Kind {
 
 func CanPlay(game *Game, c *Card) string {
 	switch {
-		case c.HasKind(kAction):
+		case isAction(c):
 			if game.phase != phAction {
 				return "wrong phase"
 			}
 			if game.NowPlaying().a == 0 {
 				return "out of actions"
 			}
-		case c.HasKind(kTreasure):
+		case isTreasure(c):
 			if game.phase != phBuy {
 				return "wrong phase"
 			}
@@ -387,8 +391,10 @@ func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 		if c.supply == 0 {
 			return errCmd, "supply exhausted"
 		}
-		if msg := fun(c); msg != "" {
-			return errCmd, msg
+		if fun != nil {
+			if msg := fun(c); msg != "" {
+				return errCmd, msg
+			}
 		}
 		return Command{"pick", c}, ""
 	})
@@ -459,8 +465,6 @@ func (game *Game) attack(fun func(*Player)) {
 		fun(other)
 	}
 }
-
-func isVictory(c *Card) bool { return c.HasKind(kVictory) }
 
 func (game *Game) getBool(p *Player) bool {
 	game.SetParse(func(b byte) (Command, string) {
@@ -730,14 +734,14 @@ Adventurer,6,Action
 						fmt.Printf("%v reveals %v\n", other.name, c.name)
 						other.deck = other.deck[1:]
 						v = append(v, c)
-						if c.HasKind(kTreasure) {
+						if isTreasure(c) {
 							trashi = i
 							found++
 						}
 					}
 					if found > 1 {
 						sel := game.pick(v, p, 1, true, func(c *Card) string {
-							if !c.HasKind(kTreasure) {
+							if !isTreasure(c) {
 								return "must pick Treasure"
 							}
 							return ""
@@ -765,7 +769,6 @@ Adventurer,6,Action
 		case "Throne Room":
 			add(func(game *Game) {
 				p := game.NowPlaying()
-				isAction := func(c *Card) bool { return c.HasKind(kAction) }
 				if !inHand(p, isAction) {
 					return
 				}
@@ -799,12 +802,10 @@ Adventurer,6,Action
 						break
 					}
 					c := p.hand[len(p.hand)-1]
-					if c.HasKind(kAction) {
-						if game.getBool(p) {
-							fmt.Printf("%v sets aside %v\n", p.name, c.name)
-							p.hand = p.hand[:len(p.hand)-1]
-							v = append(v, c)
-						}
+					if isAction(c) && game.getBool(p) {
+						fmt.Printf("%v sets aside %v\n", p.name, c.name)
+						p.hand = p.hand[:len(p.hand)-1]
+						v = append(v, c)
 					}
 				}
 				p.discard = append(p.discard, v...)
@@ -812,7 +813,6 @@ Adventurer,6,Action
 		case "Mine":
 			add(func(game *Game) {
 				p := game.NowPlaying()
-				isTreasure := func(c *Card) bool { return c.HasKind(kTreasure) }
 				if !inHand(p, isTreasure) {
 					return
 				}
@@ -853,7 +853,7 @@ Adventurer,6,Action
 					if len(p.deck) == 0 {
 						break
 					}
-					if p.deck[0].HasKind(kTreasure) {
+					if isTreasure(p.deck[0]) {
 						fmt.Printf("%v puts %v in hand\n", p.name, p.deck[0].name)
 						p.hand = append(p.hand, p.deck[0])
 						n--
@@ -1016,6 +1016,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 	prog := ""
 	newTurn := true
 	wildCard := false
+	buyMode := false
 	for {
 		<-p.wait
 		if newTurn {
@@ -1025,31 +1026,36 @@ func (consoleGamer) start(game *Game, p *Player) {
 		game.ch <- func() Command {
 			// Automatically advance to next phase when it's obvious.
 			if !game.HasStack() {
-				if game.phase == phCleanup {
-					newTurn = true
-					return Command{"next", nil}
-				}
-				if game.phase == phAction {
-					if p.a == 0 || !inHand(p, func(c *Card) bool { return c.HasKind(kAction) }) {
+				switch game.phase {
+				case phAction:
+					if p.a == 0 || !inHand(p, isAction) {
 						return Command{"next", nil}
 					}
-				}
-				if p.b == 0 {
+				case phBuy:
+					if p.b == 0 {
+						return Command{"next", nil}
+					}
+				case phCleanup:
+					buyMode = false
+					newTurn = true
 					return Command{"next", nil}
+				default:
+					panic("unknown phase")
 				}
+			}
+			if game.phase == phBuy && !inHand(p, isTreasure) {
+				buyMode = true
 			}
 
 			for {
-				// TODO: Change this to modify 'prog' (by inserting all treasure
-				// cards) when first encountered.
 				if wildCard {
 					for k := len(p.hand)-1; k >= 0; k-- {
-						if p.hand[k].HasKind(kTreasure) {
+						if isTreasure(p.hand[k]) {
 							return Command{"play", p.hand[k]}
 						}
 					}
+					wildCard = false
 				}
-				wildCard = false
 				i++
 				frame := game.StackTop()
 				for i >= len(prog) {
@@ -1090,20 +1096,11 @@ func (consoleGamer) start(game *Game, p *Player) {
 					switch prog[i] {
 					case '+': fallthrough
 					case ';':
-						i++
-						if i == len(prog) {
-							msg = "expected card"
+						if game.phase != phBuy {
+							msg = "wrong phase"
 							break
 						}
-						choice := game.keyToCard(prog[i])
-						if choice == nil {
-							msg = "no such card"
-							break
-						}
-						if msg = CanBuy(game, choice); msg != "" {
-							break
-						}
-						return Command{"buy", choice}
+						buyMode = !buyMode
 					case '.':
 						return Command{"next", nil}
 					case '*':
@@ -1117,6 +1114,12 @@ func (consoleGamer) start(game *Game, p *Player) {
 						if c == nil {
 							msg = "unrecognized command"
 							break
+						}
+						if buyMode {
+							if msg = CanBuy(game, c); msg != "" {
+								break
+							}
+							return Command{"buy", c}
 						}
 						if msg = CanPlay(game, c); msg != "" {
 							break
@@ -1188,7 +1191,7 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 				return Command{"next", nil}
 			}
 			for k := len(p.hand)-1; k >= 0; k-- {
-				if p.hand[k].HasKind(kTreasure) {
+				if isTreasure(p.hand[k]) {
 					return Command{"play", p.hand[k]}
 				}
 			}
