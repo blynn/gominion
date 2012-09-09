@@ -194,14 +194,14 @@ func (p *Player) MaybeShuffle() {
 	}
 }
 
-func (p *Player) draw(n int) {
+func (p *Player) draw(n int) int {
 	if n == 0 {
-		return
+		return 0
 	}
 	p.MaybeShuffle()
 	fmt.Printf("%v draws %v\n", p.name, p.deck[0].name)
 	p.hand, p.deck = append(p.hand, p.deck[0]), p.deck[1:]
-	p.draw(n-1)
+	return 1 + p.draw(n-1)
 }
 
 func (p *Player) cleanup() {
@@ -505,6 +505,7 @@ Throne Room,4,Action
 Council Room,5,Action,+C4,+B1
 Festival,5,Action,+A2,+B1,$2
 Laboratory,5,Action,+C2,+A1
+Library,5,Action
 Market,5,Action,+C1,+A1,+B1,$1
 `, "\n") {
 		if len(s) == 0 {
@@ -765,6 +766,28 @@ Market,5,Action,+C1,+A1,+B1,$1
 			add(func(game *Game) {
 				game.ForOthers(func(other *Player) { other.draw(1) })
 			})
+		case "Library":
+			add(func(game *Game) {
+				p := game.NowPlaying()
+				var v []*Card
+				for {
+					if len(p.hand) == 7 {
+						break
+					}
+					if p.draw(1) == 0 {
+						break
+					}
+					c := p.hand[len(p.hand)-1]
+					if c.HasKind(kAction) {
+						if game.getBool(p) {
+							fmt.Printf("%v sets aside %v\n", p.name, c.name)
+							p.hand = p.hand[:len(p.hand)-1]
+							v = append(v, c)
+						}
+					}
+				}
+				p.discard = append(p.discard, v...)
+			})
 		}
 	}
 
@@ -802,12 +825,10 @@ Market,5,Action,+C1,+A1,+B1,$1
 	setSupply("Curse", 10*(len(players) - 1))
 	for _, p := range players {
 		for i := 0; i < 3; i++ {
-			p.deck.Add("Bureaucrat")
-			//p.deck.Add("Estate")
+			p.deck.Add("Estate")
 		}
 		for i := 0; i < 7; i++ {
-			p.deck.Add("Militia")
-			//p.deck.Add("Copper")
+			p.deck.Add("Copper")
 		}
 		p.deck.shuffle()
 		p.draw(5)
@@ -827,7 +848,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Cellar,Bureaucrat,Village,Workshop,Moneylender,Remodel,Throne Room,Militia,Laboratory", ",") {
+	for i, s := range strings.Split("Cellar,Bureaucrat,Village,Workshop,Moneylender,Remodel,Throne Room,Militia,Library", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
