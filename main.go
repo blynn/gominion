@@ -455,6 +455,8 @@ Workshop,3,Action
 Bureaucrat,4,Action-Attack
 Feast,4,Action
 Militia,4,Action-Attack,$2
+Moneylender,4,Action
+Remodel,4,Action
 Smithy,4,Action,+C3
 Festival,5,Action,+A2,+B1,$2
 Laboratory,5,Action,+C2,+A1
@@ -605,6 +607,42 @@ Market,5,Action,+C1,+A1,+B1,$1
 					}
 				})
 			})
+		case "Moneylender":
+			add(func(game *Game) {
+				p := game.NowPlaying()
+				isCopper := func(c *Card) bool { return c.name == "Copper" }
+				if !inHand(p, isCopper) {
+					return
+				}
+				for i, c := range p.hand {
+					if isCopper(c) {
+						fmt.Printf("%v trashes %v\n", p.name, c.name)
+						game.trash = append(game.trash, p.hand[i])
+						p.hand = append(p.hand[:i], p.hand[i+1:]...)
+						p.c += 3
+						return
+					}
+				}
+			})
+		case "Remodel":
+			add(func(game *Game) {
+				p := game.NowPlaying()
+				if len(p.hand) == 0 {
+					return
+				}
+				sel := pickHand(game, p, 1, true, nil)
+				max := 2
+				for i, c := range p.hand {
+					if sel[i] {
+						fmt.Printf("%v trashes %v\n", p.name, c.name)
+						max += c.cost
+						game.trash = append(game.trash, p.hand[i])
+						p.hand = append(p.hand[:i], p.hand[i+1:]...)
+						break
+					}
+				}
+				pickGain(game, max)
+			})
 		}
 	}
 
@@ -665,7 +703,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Cellar,Moat,Chancellor,Village,Woodcutter,Workshop,Bureaucrat,Feast,Militia,Laboratory", ",") {
+	for i, s := range strings.Split("Cellar,Moat,Village,Woodcutter,Workshop,Moneylender,Remodel,Feast,Militia,Laboratory", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
