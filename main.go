@@ -178,10 +178,7 @@ type Player struct {
 	ch chan *Game
 }
 
-func (p *Player) draw(n int) {
-	if n == 0 {
-		return
-	}
+func (p *Player) MaybeShuffle() {
 	if len(p.deck) == 0 {
 		if len(p.discard) == 0 {
 			return
@@ -189,6 +186,13 @@ func (p *Player) draw(n int) {
 		p.deck, p.discard = p.discard, p.deck
 		p.deck.shuffle()
 	}
+}
+
+func (p *Player) draw(n int) {
+	if n == 0 {
+		return
+	}
+	p.MaybeShuffle()
 	fmt.Printf("%v draws %v\n", p.name, p.deck[0].name)
 	p.hand, p.deck = append(p.hand, p.deck[0]), p.deck[1:]
 	p.draw(n-1)
@@ -281,8 +285,8 @@ func (game *Game) getCommand(p *Player) Command {
 	return cmd
 }
 
-func pickHand(game *Game, p *Player, n int, exact bool, cond func(*Card) string) []bool {
-	sel := make([]bool, len(p.hand))
+func (game *Game) pick(list []*Card, p *Player, n int, exact bool, cond func(*Card) string) []bool {
+	sel := make([]bool, len(list))
 	game.SetParse(func(b byte) (Command, string) {
 		if b == '/' {
 			return Command{"done", nil}, ""
@@ -292,7 +296,7 @@ func pickHand(game *Game, p *Player, n int, exact bool, cond func(*Card) string)
 			return errCmd, "unrecognized card"
 		}
 		if !func() bool {
-			for i, c := range p.hand {
+			for i, c := range list {
 				if sel[i] {
 					continue
 				}
@@ -316,7 +320,7 @@ func pickHand(game *Game, p *Player, n int, exact bool, cond func(*Card) string)
 		switch cmd.s {
 			case "pick":
 				found := false
-				for i, c := range p.hand {
+				for i, c := range list {
 					if !sel[i] && c == cmd.c {
 						sel[i] = true
 						n--
@@ -338,6 +342,10 @@ func pickHand(game *Game, p *Player, n int, exact bool, cond func(*Card) string)
 		}
 	}
 	return sel
+}
+
+func pickHand(game *Game, p *Player, n int, exact bool, cond func(*Card) string) []bool {
+	return game.pick(p.hand, p, n, exact, cond)
 }
 
 func (game *Game) Gain(p *Player, c *Card) {
@@ -427,6 +435,26 @@ func (game *Game) attack(fun func(other *Player)) {
 
 func isVictory(c *Card) bool { return c.HasKind(kVictory) }
 
+func (game *Game) getBool(p *Player) bool {
+	game.SetParse(func(b byte) (Command, string) {
+		switch b {
+			case '\\':
+				return Command{"yes", nil}, ""
+			case '/':
+				return Command{"done", nil}, ""
+		}
+		return errCmd, "\\ for yes, / for no"
+	})
+	cmd := game.getCommand(p)
+	switch cmd.s {
+	case "yes":
+		return true
+	case "done":
+		return false
+	}
+	panic("bad command: " + cmd.s)
+}
+
 func main() {
 	rand.Seed(60)
 	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
@@ -458,6 +486,8 @@ Militia,4,Action-Attack,$2
 Moneylender,4,Action
 Remodel,4,Action
 Smithy,4,Action,+C3
+Spy,4,Action-Attack,+C1,+A1
+Thief,4,Action-Attack
 Festival,5,Action,+A2,+B1,$2
 Laboratory,5,Action,+C2,+A1
 Market,5,Action,+C1,+A1,+B1,$1
@@ -538,24 +568,10 @@ Market,5,Action,+C1,+A1,+B1,$1
 			})
 		case "Chancellor":
 			add(func(game *Game) {
-				game.SetParse(func(b byte) (Command, string) {
-					switch b {
-						case '\\':
-							return Command{"yes", nil}, ""
-						case '/':
-							return Command{"done", nil}, ""
-					}
-					return errCmd, "\\ for yes, / for no"
-				})
 				p := game.NowPlaying()
-				cmd := game.getCommand(p)
-				switch cmd.s {
-				case "yes":
+				if game.getBool(p) {
 					fmt.Printf("%v discards deck\n", p.name)
 					p.discard, p.deck = append(p.discard, p.deck...), nil
-				case "done":
-				default:
-					panic("bad command: " + cmd.s)
 				}
 			})
 		case "Bureaucrat":
@@ -643,6 +659,71 @@ Market,5,Action,+C1,+A1,+B1,$1
 				}
 				pickGain(game, max)
 			})
+		case "Spy":
+			add(func(game *Game) {
+				p := game.NowPlaying()
+				game.attack(func(other *Player) {
+					other.MaybeShuffle()
+					if len(other.deck) == 0 {
+						return
+					}
+					c := other.deck[0]
+					fmt.Printf("%v reveals %v\n", other.name, c.name)
+					if game.getBool(p) {
+						fmt.Printf("%v discards %v\n", other.name, c.name)
+						other.discard = append(other.discard, c)
+						other.deck = other.deck[1:]
+					}
+				})
+			})
+		case "Thief":
+			add(func(game *Game) {
+				p := game.NowPlaying()
+				game.attack(func(other *Player) {
+					var v []*Card
+					found := 0
+					trashi := 0
+					for i := 0; i < 2; i++ {
+						other.MaybeShuffle()
+						if len(other.deck) == 0 {
+							break
+						}
+						c := other.deck[0]
+						fmt.Printf("%v reveals %v\n", other.name, c.name)
+						other.deck = other.deck[1:]
+						v = append(v, c)
+						if c.HasKind(kTreasure) {
+							trashi = i
+							found++
+						}
+					}
+					if found > 1 {
+						sel := game.pick(v, p, 1, true, func(c *Card) string {
+							if !c.HasKind(kTreasure) {
+								return "must pick Treasure"
+							}
+							return ""
+						})
+						for i, b := range sel {
+							if b {
+								trashi = i
+							}
+						}
+					}
+					if found > 0 {
+						c := v[trashi]
+						fmt.Printf("%v trashes %v\n", other.name, c.name)
+						v = append(v[:trashi], v[trashi+1:]...)
+						if c.supply > 0 && game.getBool(p) {
+							game.Gain(p, c)
+						}
+					}
+					for _, c := range v {
+						fmt.Printf("%v discards %v\n", other.name, c.name)
+						other.discard = append(other.discard, c)
+					}
+				})
+			})
 		}
 	}
 
@@ -703,7 +784,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Cellar,Moat,Village,Woodcutter,Workshop,Moneylender,Remodel,Feast,Militia,Laboratory", ",") {
+	for i, s := range strings.Split("Cellar,Moat,Village,Woodcutter,Workshop,Moneylender,Thief,Feast,Militia,Laboratory", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
