@@ -117,7 +117,7 @@ func (game *Game) play(k int) {
 		fmt.Printf("unimplemented  :(\n")
 		return
 	}
-	game.stack = append(game.stack, &Frame{card:c, game:game})
+	game.stack = append(game.stack, &Frame{card:c})
 	for _, f := range c.act {
 		f(game)
 	}
@@ -162,7 +162,6 @@ func (game *Game) NowPlaying() *Player {
 
 type Frame struct {
 	Parse func(b byte) (Command, string)
-	game *Game
 	card *Card
 }
 
@@ -286,7 +285,7 @@ func (game *Game) getCommand(p *Player) Command {
 	return cmd
 }
 
-func pickHand(game *Game, p *Player, n int, exact bool) []bool {
+func pickHand(game *Game, p *Player, n int, exact bool, cond func(*Card) string) []bool {
 	sel := make([]bool, len(p.hand))
 	game.SetParse(func(b byte) (Command, string) {
 		if b == '/' {
@@ -294,7 +293,7 @@ func pickHand(game *Game, p *Player, n int, exact bool) []bool {
 		}
 		choice := game.keyToCard(b)
 		if choice == nil {
-			return Command{}, "unrecognized card"
+			return errCmd, "unrecognized card"
 		}
 		if !func() bool {
 			for i, c := range p.hand {
@@ -307,7 +306,12 @@ func pickHand(game *Game, p *Player, n int, exact bool) []bool {
 			}
 			return false
 		}() {
-			return Command{}, "invalid choice"
+			return errCmd, "invalid choice"
+		}
+		if cond != nil {
+			if msg := cond(choice); msg != "" {
+				return errCmd, msg
+			}
 		}
 		return Command{"pick", choice}, ""
 	})
@@ -344,13 +348,13 @@ func pickGain(game *Game, max int) {
 	game.SetParse(func(b byte) (Command, string) {
 		c := game.keyToCard(b)
 		if c == nil {
-			return Command{}, "expected card"
+			return errCmd, "expected card"
 		}
 		if c.cost > max {
-			return Command{}, "too expensive"
+			return errCmd, "too expensive"
 		}
 		if c.supply == 0 {
-			return Command{}, "supply exhausted"
+			return errCmd, "supply exhausted"
 		}
 		return Command{"pick", c}, ""
 	})
@@ -367,9 +371,40 @@ func pickGain(game *Game, max int) {
 	cmd.c.supply--
 }
 
+var errCmd Command
+
+func reacts(game *Game, p *Player) bool {
+	found := false
+	for _, c := range p.hand {
+		if c.name == "Moat" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	sel := pickHand(game, p, 1, false, func(c *Card) string {
+		if c.name != "Moat" {
+			return "pick Moat or nothing"
+		}
+		return ""
+	})
+	for i, c := range p.hand {
+		if sel[i] {
+			if c.name != "Moat" {
+				panic("invalid attack reaction: " + c.name)
+			}
+			fmt.Printf("%v reveals %v\n", p.name, c.name)
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	rand.Seed(60)
-	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack"} {
+	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
 		KindDict[s] = &Kind{s}
 	}
 	kTreasure = getKind("Treasure")
@@ -387,6 +422,7 @@ Curse,0,Curse,#-1
 
 Cellar,2,Action,+A1
 Chapel,2,Action
+Moat,2,Action-Reaction,+C2
 Chancellor,3,Action,$2
 Village,3,Action,+C1,+A2
 Woodcutter,3,Action,+B1,$2
@@ -447,7 +483,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 		case "Cellar":
 			c.AddEffect(func(game *Game) {
 				p := game.NowPlaying()
-				selected := pickHand(game, p, len(p.hand), false)
+				selected := pickHand(game, p, len(p.hand), false, nil)
 				for i := len(p.hand)-1; i >= 0; i-- {
 					if selected[i] {
 						fmt.Printf("%v discards %v\n", p.name, p.hand[i].name)
@@ -460,7 +496,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 		case "Chapel":
 			c.AddEffect(func(game *Game) {
 				p := game.NowPlaying()
-				selected := pickHand(game, p, 4, false)
+				selected := pickHand(game, p, 4, false, nil)
 				for i := len(p.hand)-1; i >= 0; i-- {
 					if selected[i] {
 						fmt.Printf("%v trashes %v\n", p.name, p.hand[i].name)
@@ -478,7 +514,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 						case '/':
 							return Command{"done", nil}, ""
 					}
-					return Command{}, "\\ for yes, / for no"
+					return errCmd, "\\ for yes, / for no"
 				})
 				p := game.NowPlaying()
 				cmd := game.getCommand(p)
@@ -506,7 +542,10 @@ Market,5,Action,+C1,+A1,+B1,$1
 				for i := (game.n+1)%m; i != game.n; i = (i+1)%m {
 					other := game.players[i]
 					fmt.Printf("%v attacks %v\n", game.NowPlaying().name, other.name)
-					sel := pickHand(game, other, 3, true)
+					if reacts(game, other) {
+						continue
+					}
+					sel := pickHand(game, other, 3, true, nil)
 					for i := len(other.hand)-1; i >= 0; i-- {
 						if !sel[i] {
 							fmt.Printf("%v discards %v\n", other.name, other.hand[i].name)
@@ -524,7 +563,8 @@ Market,5,Action,+C1,+A1,+B1,$1
 	game := &Game{ch: make(chan Command)}
 	game.players = []*Player{
 		&Player{name:"Ben", fun:consoleGamer{}},
-		&Player{name:"AI", fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
+		//&Player{name:"AI", fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
+		&Player{name:"AI", fun:consoleGamer{}},
 	}
 	players := game.players
 
@@ -576,7 +616,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Cellar,Chapel,Chancellor,Village,Woodcutter,Workshop,Feast,Militia", ",") {
+	for i, s := range strings.Split("Cellar,Moat,Chancellor,Village,Woodcutter,Workshop,Feast,Militia,Laboratory", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
@@ -584,7 +624,6 @@ Market,5,Action,+C1,+A1,+B1,$1
 	for game.n = 0;; game.n = (game.n+1) % len(players) {
 		p := game.NowPlaying()
 		p.a, p.b, p.c = 1, 1, 0
-		fmt.Printf("%v to play\n", p.name)
 		for game.phase = phAction; game.phase <= phCleanup; {
 			cmd := game.getCommand(p)
 			switch cmd.s {
@@ -717,7 +756,7 @@ func (consoleGamer) start(ch chan *Game, p *Player) {
 				i++
 				frame := game.StackTop()
 				for i >= len(prog) {
-					fmt.Printf("a:%v b:%v c:%v", p.a, p.b, p.c)
+					fmt.Printf("a:%v b:%v c:%v %v", p.a, p.b, p.c, p.name)
 					if frame != nil {
 						fmt.Printf(" %v", frame.card.name)
 					}
