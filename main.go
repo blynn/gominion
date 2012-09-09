@@ -20,7 +20,7 @@ type Card struct {
 	cost int
 	kind []*Kind
 	coin int
-	vp int
+	vp func(*Game) int
 	supply int
 	act []func(*Game)
 }
@@ -111,7 +111,7 @@ func (game *Game) multiplay(k int, n int) {
 	for ;n > 0; n-- {
 		fmt.Printf("%v plays %v\n", p.name, c.name)
 		if c.act == nil {
-			fmt.Printf("unimplemented  :(")
+			fmt.Printf("%v unimplemented  :(\n", c.name)
 			return
 		}
 		game.stack = append(game.stack, &Frame{card:c})
@@ -254,7 +254,8 @@ func CanBuy(game *Game, c *Card) string {
 
 func (game *Game) Over() {
 	fmt.Printf("Game over\n")
-	for _, p := range game.players {
+	for i, p := range game.players {
+		game.n = i  // We want NowPlaying() for some VP computations.
 		p.deck, p.discard = append(p.deck, p.discard...), nil
 		p.deck, p.hand = append(p.deck, p.hand...), nil
 		score := 0
@@ -263,11 +264,16 @@ func (game *Game) Over() {
 		})
 		for _, c := range p.deck {
 			if isVictory(c) || c.HasKind(kCurse) {
+				if c.vp == nil {
+					fmt.Printf("%v unimplemented  :(\n", c.name)
+					continue
+				}
+				n := c.vp(game)
 				v := m[c]
 				v.count++
-				v.pts += c.vp
+				v.pts += n
 				m[c] = v
-				score += c.vp
+				score += n
 			}
 		}
 		fmt.Printf("%v: %v\n", p.name, score)
@@ -369,7 +375,7 @@ func (game *Game) GainIfPossible(p *Player, c *Card) {
 	}
 }
 
-func pickGainCond(game *Game, max int, fun func(*Card) string) {
+func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 	game.SetParse(func(b byte) (Command, string) {
 		c := game.keyToCard(b)
 		if c == nil {
@@ -395,6 +401,7 @@ func pickGainCond(game *Game, max int, fun func(*Card) string) {
 		panic("too expensive")
 	}
 	game.Gain(p, cmd.c)
+	return cmd.c
 }
 
 func pickGain(game *Game, max int) {
@@ -502,6 +509,7 @@ Woodcutter,3,Action,+B1,$2
 Workshop,3,Action
 Bureaucrat,4,Action-Attack
 Feast,4,Action
+Gardens,4,Victory
 Militia,4,Action-Attack,$2
 Moneylender,4,Action
 Remodel,4,Action
@@ -549,7 +557,7 @@ Witch,5,Action-Attack,+C2
 			case '$':
 				add(func(game *Game) { game.addCoins(PanickyAtoi(s[1:])) })
 			case '#':
-				c.vp = PanickyAtoi(s[1:])
+				c.vp = func(game *Game) int { return PanickyAtoi(s[1:]) }
 			case '+':
 				switch s[1] {
 					case 'A':
@@ -633,6 +641,8 @@ Witch,5,Action-Attack,+C2
 				p.played = p.played[:len(p.played)-1]
 				pickGain(game, 5)
 			})
+		case "Gardens":
+			c.vp = func(game *Game) int { return len(game.NowPlaying().deck) / 10 }
 		case "Workshop":
 			add(func(game *Game) { pickGain(game, 4) })
 		case "Militia":
@@ -817,7 +827,10 @@ Witch,5,Action-Attack,+C2
 						fmt.Printf("%v trashes %v\n", p.name, c.name)
 						game.trash = append(game.trash, p.hand[i])
 						p.hand = append(p.hand[:i], p.hand[i+1:]...)
-						pickGainCond(game, c.cost + 3, f)
+						choice := pickGainCond(game, c.cost + 3, f)
+						fmt.Printf("%v puts %v into hand\n", p.name, choice.name)
+						p.hand = append(p.hand, choice)
+						p.discard = p.discard[:len(p.discard)-1]
 						return
 					}
 				}
@@ -887,7 +900,7 @@ Witch,5,Action-Attack,+C2
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Bureaucrat,Village,Moneylender,Remodel,Throne Room,Militia,Mine,Witch", ",") {
+	for i, s := range strings.Split("Bureaucrat,Village,Gardens,Moneylender,Remodel,Throne Room,Militia,Mine,Festival", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
