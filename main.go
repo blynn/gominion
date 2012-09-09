@@ -173,7 +173,7 @@ type Command struct {
 }
 
 type PlayFun interface {
-	start(chan *Game, *Player)
+	start(*Game, *Player)
 }
 
 type Player struct {
@@ -181,7 +181,7 @@ type Player struct {
 	fun PlayFun
 	a, b, c int
 	deck, hand, played, discard Pile
-	ch chan *Game
+	wait chan interface{}
 }
 
 func (p *Player) MaybeShuffle() {
@@ -287,7 +287,7 @@ func (game *Game) Over() {
 }
 
 func (game *Game) getCommand(p *Player) Command {
-	p.ch <- game
+	p.wait <- nil
 	cmd := <-game.ch
 	if cmd.s == "quit" {
 		p.cleanup()
@@ -908,8 +908,8 @@ Adventurer,6,Action
 		}
 		p.deck.shuffle()
 		p.draw(5)
-		p.ch = make(chan *Game)
-		go p.fun.start(p.ch, p)
+		p.wait = make(chan interface{})
+		go p.fun.start(game, p)
 	}
 	layout := func(s string, key byte) {
 		c := GetCard(s)
@@ -986,9 +986,8 @@ Adventurer,6,Action
 
 type consoleGamer struct {}
 
-func (consoleGamer) start(ch chan *Game, p *Player) {
+func (consoleGamer) start(game *Game, p *Player) {
 	reader := bufio.NewReader(os.Stdin)
-	var game *Game
 	dump := func() {
 		for _, c := range game.suplist {
 			fmt.Printf("[%c] %v(%v) $%v\n", c.key, c.name, c.supply, c.cost)
@@ -1018,8 +1017,7 @@ func (consoleGamer) start(ch chan *Game, p *Player) {
 	newTurn := true
 	wildCard := false
 	for {
-		game = <-ch
-		p := game.NowPlaying()
+		<-p.wait
 		if newTurn {
 			dump()
 			newTurn = false
@@ -1152,9 +1150,9 @@ type simpleBuyer struct {
 	list []string
 }
 
-func (this simpleBuyer) start(ch chan *Game, p *Player) {
+func (this simpleBuyer) start(game *Game, p *Player) {
 	for {
-		game := <-ch
+		<-p.wait
 		for {
 			frame := game.StackTop()
 			if frame == nil {
@@ -1165,7 +1163,7 @@ func (this simpleBuyer) start(ch chan *Game, p *Player) {
 				for _, c := range p.hand {
 					if isVictory(c) {
 						game.ch <- Command{"pick", c}
-						game = <-ch
+						 <-p.wait
 						break
 					}
 				}
@@ -1173,7 +1171,7 @@ func (this simpleBuyer) start(ch chan *Game, p *Player) {
 				// TODO: Better discard strategy.
 				for i := 0; i < 3; i++ {
 					game.ch <- Command{"pick", p.hand[i]}
-					game = <-ch
+					<-p.wait
 				}
 			default:
 				panic("AI unimplemented: " + frame.card.name)
