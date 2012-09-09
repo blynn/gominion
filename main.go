@@ -524,6 +524,7 @@ Library,5,Action
 Market,5,Action,+C1,+A1,+B1,$1
 Mine,5,Action
 Witch,5,Action-Attack,+C2
+Adventurer,6,Action
 `, "\n") {
 		if len(s) == 0 {
 			continue
@@ -840,6 +841,29 @@ Witch,5,Action-Attack,+C2
 			add(func(game *Game) {
 				game.ForOthers(func(other *Player) { game.GainIfPossible(other, GetCard("Curse")) })
 			})
+		case "Adventurer":
+			add(func(game *Game) {
+				p := game.NowPlaying()
+				n := 2
+				for {
+					if n == 0 {
+						break
+					}
+					p.MaybeShuffle()
+					if len(p.deck) == 0 {
+						break
+					}
+					if p.deck[0].HasKind(kTreasure) {
+						fmt.Printf("%v puts %v in hand\n", p.name, p.deck[0].name)
+						p.hand = append(p.hand, p.deck[0])
+						n--
+					} else {
+						fmt.Printf("%v discards %v\n", p.name, p.deck[0].name)
+						p.discard = append(p.discard, p.deck[0])
+					}
+					p.deck = p.deck[1:]
+				}
+			})
 		}
 	}
 
@@ -900,7 +924,7 @@ Witch,5,Action-Attack,+C2
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Bureaucrat,Village,Gardens,Moneylender,Remodel,Throne Room,Militia,Mine,Festival", ",") {
+	for i, s := range strings.Split("Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
