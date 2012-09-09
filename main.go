@@ -117,9 +117,11 @@ func (game *Game) play(k int) {
 		fmt.Printf("unimplemented  :(\n")
 		return
 	}
+	game.stack = append(game.stack, &Frame{card:c, game:game})
 	for _, f := range c.act {
 		f(game)
 	}
+	game.stack = game.stack[:len(game.stack)-1]
 }
 
 func (game Game) addCoins(n int) {
@@ -138,11 +140,8 @@ func (game Game) addCards(n int) {
 	game.NowPlaying().draw(n)
 }
 
-func (game *Game) Push(f *Frame) {
-	f.game = game
-	p := game.NowPlaying()
-	f.card = p.played[len(p.played)-1]
-	game.stack = append(game.stack, f)
+func (game *Game) SetParse(fun func(b byte) (Command, string)) {
+	game.stack[len(game.stack)-1].Parse = fun
 }
 
 func (game *Game) HasStack() bool {
@@ -155,10 +154,6 @@ func (game *Game) StackTop() *Frame {
 		return nil
 	}
 	return game.stack[n-1]
-}
-
-func (game *Game) Pop() {
-	game.stack = game.stack[:len(game.stack)-1]
 }
 
 func (game *Game) NowPlaying() *Player {
@@ -295,7 +290,7 @@ func (game *Game) getCommand() Command {
 func pickHand(game *Game, n int) []bool {
 	p := game.NowPlaying()
 	sel := make([]bool, len(p.hand))
-	game.Push(&Frame{Parse:func(b byte) (Command, string) {
+	game.SetParse(func(b byte) (Command, string) {
 		if b == '/' {
 			return Command{"done", nil}, ""
 		}
@@ -317,7 +312,7 @@ func pickHand(game *Game, n int) []bool {
 			return Command{}, "invalid choice"
 		}
 		return Command{"pick", choice}, ""
-	}})
+	})
 	for stop := false; !stop; {
 		cmd := game.getCommand()
 		switch cmd.s {
@@ -341,8 +336,34 @@ func pickHand(game *Game, n int) []bool {
 			  panic("bad command: " + cmd.s)
 		}
 	}
-	game.Pop()
 	return sel
+}
+
+func pickGain(game *Game, max int) {
+	game.SetParse(func(b byte) (Command, string) {
+		c := game.keyToCard(b)
+		if c == nil {
+			return Command{}, "expected card"
+		}
+		if c.cost > max {
+			return Command{}, "too expensive"
+		}
+		if c.supply == 0 {
+			return Command{}, "supply exhausted"
+		}
+		return Command{"pick", c}, ""
+	})
+	cmd := game.getCommand()
+	if cmd.s != "pick" {
+		panic("bad command: " + cmd.s)
+	}
+	if cmd.c.cost > max || cmd.c.supply == 0 {
+		panic("invalid choice")
+	}
+	p := game.NowPlaying()
+	fmt.Printf("%v gains %v\n", p.name, cmd.c.name)
+	p.discard = append(p.discard, cmd.c)
+	cmd.c.supply--
 }
 
 func main() {
@@ -369,6 +390,7 @@ Chancellor,3,Action,$2
 Village,3,Action,+C1,+A2
 Woodcutter,3,Action,+B1,$2
 Workshop,3,Action
+Feast,4,Action
 Smithy,4,Action,+C3
 Festival,5,Action,+A2,+B1,$2
 Laboratory,5,Action,+C2,+A1
@@ -418,85 +440,64 @@ Market,5,Action,+C1,+A1,+B1,$1
 			default:
 				panic(s)
 			}
-			switch c.name {
-			case "Cellar":
-				c.AddEffect(func(game *Game) {
-					selected := pickHand(game, 4)
+		}
+		switch c.name {
+		case "Cellar":
+			c.AddEffect(func(game *Game) {
+				p := game.NowPlaying()
+				selected := pickHand(game, len(p.hand))
+				for i := len(p.hand)-1; i >= 0; i-- {
+					if selected[i] {
+						fmt.Printf("%v discards %v\n", p.name, p.hand[i].name)
+						p.discard = append(p.discard, p.hand[i])
+						p.hand = append(p.hand[:i], p.hand[i+1:]...)
+					}
+				}
+				p.draw(len(selected))
+			})
+		case "Chapel":
+			c.AddEffect(func(game *Game) {
+				p := game.NowPlaying()
+				selected := pickHand(game, 4)
+				for i := len(p.hand)-1; i >= 0; i-- {
+					if selected[i] {
+						fmt.Printf("%v trashes %v\n", p.name, p.hand[i].name)
+						game.trash = append(game.trash, p.hand[i])
+						p.hand = append(p.hand[:i], p.hand[i+1:]...)
+					}
+				}
+			})
+		case "Chancellor":
+			c.AddEffect(func(game *Game) {
+				game.SetParse(func(b byte) (Command, string) {
+					switch b {
+						case '\\':
+							return Command{"yes", nil}, ""
+						case '/':
+							return Command{"done", nil}, ""
+					}
+					return Command{}, "\\ for yes, / for no"
+				})
+				cmd := game.getCommand()
+				switch cmd.s {
+				case "yes":
 					p := game.NowPlaying()
-					for i := len(p.hand)-1; i >= 0; i-- {
-						if selected[i] {
-							fmt.Printf("%v discards %v\n", p.name, p.hand[i].name)
-							p.discard = append(p.discard, p.hand[i])
-							p.hand = append(p.hand[:i], p.hand[i+1:]...)
-						}
-					}
-					p.draw(len(selected))
-				})
-			case "Chapel":
-				c.AddEffect(func(game *Game) {
-					selected := pickHand(game, 4)
-					p := game.NowPlaying()
-					for i := len(p.hand)-1; i >= 0; i-- {
-						if selected[i] {
-							fmt.Printf("%v trashes %v\n", p.name, p.hand[i].name)
-							game.trash = append(game.trash, p.hand[i])
-							p.hand = append(p.hand[:i], p.hand[i+1:]...)
-						}
-					}
-				})
-			case "Chancellor":
-				c.AddEffect(func(game *Game) {
-					game.Push(&Frame{Parse:func(b byte) (Command, string) {
-						switch b {
-							case '\\':
-								return Command{"yes", nil}, ""
-							case '/':
-								return Command{"done", nil}, ""
-						}
-						return Command{}, "\\ for yes, / for no"
-					}})
-					cmd := game.getCommand()
-					game.Pop()
-					switch cmd.s {
-					case "done":
-					case "yes":
-						p := game.NowPlaying()
-						fmt.Printf("%v discards deck\n", p.name)
-						p.discard, p.deck = append(p.discard, p.deck...), nil
-					default:
-						panic("bad command: " + cmd.s)
-					}
-				})
-			case "Workshop":
-				c.AddEffect(func(game *Game) {
-					max := 3
-					game.Push(&Frame{Parse:func(b byte) (Command, string) {
-						c := game.keyToCard(b)
-						if c == nil {
-							return Command{}, "expected card"
-						}
-						if c.cost > max {
-							return Command{}, "too expensive"
-						}
-						if c.supply == 0 {
-							return Command{}, "supply exhausted"
-						}
-						return Command{"pick", c}, ""
-					}})
-					cmd := game.getCommand()
-					game.Pop()
-					if cmd.s != "pick" {
-						panic("bad command: " + cmd.s)
-					}
-					if cmd.c.cost > max || cmd.c.supply == 0 {
-						panic("invalid choice")
-					}
-					p := game.NowPlaying()
-					fmt.Printf("%v gains %v\n", p.name, cmd.c.name)
-					p.discard = append(p.discard, cmd.c)
-					cmd.c.supply--
-				})
-			}
+					fmt.Printf("%v discards deck\n", p.name)
+					p.discard, p.deck = append(p.discard, p.deck...), nil
+				case "done":
+				default:
+					panic("bad command: " + cmd.s)
+				}
+			})
+		case "Feast":
+			c.AddEffect(func(game *Game) {
+				p := game.NowPlaying()
+				game.trash = append(game.trash, p.played[len(p.played)-1])
+				p.played = p.played[:len(p.played)-1]
+				pickGain(game, 5)
+			})
+		case "Workshop":
+			c.AddEffect(func(game *Game) { pickGain(game, 4) })
 		}
 	}
 
@@ -557,7 +558,7 @@ Market,5,Action,+C1,+A1,+B1,$1
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Cellar,Chapel,Chancellor,Village,Woodcutter,Workshop,Smithy,Festival,Laboratory,Market", ",") {
+	for i, s := range strings.Split("Cellar,Chapel,Chancellor,Village,Woodcutter,Workshop,Feast,Smithy", ",") {
 		setSupply(s, 10)
 		layout(s, keys[i])
 	}
