@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Kind struct {
@@ -487,7 +488,7 @@ func (game *Game) getBool(p *Player) bool {
 }
 
 func main() {
-	rand.Seed(60)
+	rand.Seed(time.Now().Unix())
 	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
 		KindDict[s] = &Kind{s}
 	}
@@ -899,18 +900,6 @@ Adventurer,6,Action
 		setSupply(s, numVictoryCards(len(players)))
 	}
 	setSupply("Curse", 10*(len(players) - 1))
-	for _, p := range players {
-		for i := 0; i < 3; i++ {
-			p.deck.Add("Estate")
-		}
-		for i := 0; i < 7; i++ {
-			p.deck.Add("Copper")
-		}
-		p.deck.shuffle()
-		p.draw(5)
-		p.wait = make(chan interface{})
-		go p.fun.start(game, p)
-	}
 	layout := func(s string, key byte) {
 		c := GetCard(s)
 		game.suplist = append(game.suplist, c)
@@ -924,9 +913,62 @@ Adventurer,6,Action
 	layout("Province", 'e')
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
-	for i, s := range strings.Split("Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop", ",") {
-		setSupply(s, 10)
-		layout(s, keys[i])
+
+	type Preset struct {
+		name string
+		cards []*Card
+	}
+	var presets []Preset
+	for _, line := range strings.Split(`
+First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
+Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
+Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village
+Size Distortion:Cellar,Chapel,Feast,Gardens,Laboratory,Thief,Village,Witch,Woodcutter,Workshop
+Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne Room,Village,Woodcutter
+`, "\n") {
+		if len(line) == 0 {
+			continue
+		}
+		s := strings.Split(line, ":")
+		pr := Preset{name:s[0]}
+		for _, s := range strings.Split(s[1], ",") {
+			c := GetCard(s)
+			// Insertion sort.
+			pr.cards = func(cards []*Card) []*Card {
+				for i, x := range cards {
+					if x.cost == c.cost && x.name > c.name || x.cost > c.cost {
+						return append(cards[:i], append([]*Card{c}, cards[i:]...)...)
+					}
+				}
+				return append(cards, c)
+			}(pr.cards)
+		}
+		presets = append(presets, pr)
+	}
+
+	fmt.Println("Available presets:")
+	for _, pr := range presets {
+		fmt.Printf("  %v", pr.name)
+	}
+	fmt.Println();
+	pr := presets[rand.Intn(len(presets))]
+	fmt.Printf("Playing \"%v\"\n", pr.name)
+
+	for i, c := range pr.cards {
+		c.supply = 10
+		layout(c.name, keys[i])
+	}
+	for _, p := range players {
+		for i := 0; i < 3; i++ {
+			p.deck.Add("Estate")
+		}
+		for i := 0; i < 7; i++ {
+			p.deck.Add("Copper")
+		}
+		p.deck.shuffle()
+		p.draw(5)
+		p.wait = make(chan interface{})
+		go p.fun.start(game, p)
 	}
 
 	for game.n = 0;; game.n = (game.n+1) % len(players) {
