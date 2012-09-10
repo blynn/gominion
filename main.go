@@ -189,21 +189,26 @@ type Player struct {
 	wait chan interface{}
 }
 
-func (p *Player) MaybeShuffle() {
+// MaybeShuffle returns true if deck is non-empty, shuffling the discards
+// into a new deck if necessary.
+func (p *Player) MaybeShuffle() bool {
 	if len(p.deck) == 0 {
 		if len(p.discard) == 0 {
-			return
+			return false
 		}
 		p.deck, p.discard = p.discard, p.deck
 		p.deck.shuffle()
 	}
+	return true
 }
 
 func (p *Player) draw(n int) int {
 	if n == 0 {
 		return 0
 	}
-	p.MaybeShuffle()
+	if !p.MaybeShuffle() {
+		return 0
+	}
 	fmt.Printf("%v draws %v\n", p.name, p.deck[0].name)
 	p.hand, p.deck = append(p.hand, p.deck[0]), p.deck[1:]
 	return 1 + p.draw(n-1)
@@ -584,14 +589,16 @@ Adventurer,6,Action
 			add(func(game *Game) {
 				p := game.NowPlaying()
 				selected := pickHand(game, p, len(p.hand), false, nil)
+				n := 0
 				for i := len(p.hand)-1; i >= 0; i-- {
 					if selected[i] {
 						fmt.Printf("%v discards %v\n", p.name, p.hand[i].name)
 						p.discard = append(p.discard, p.hand[i])
 						p.hand = append(p.hand[:i], p.hand[i+1:]...)
+						n++
 					}
 				}
-				p.draw(len(selected))
+				p.draw(n)
 			})
 		case "Chapel":
 			add(func(game *Game) {
@@ -706,8 +713,7 @@ Adventurer,6,Action
 			add(func(game *Game) {
 				p := game.NowPlaying()
 				game.attack(func(other *Player) {
-					other.MaybeShuffle()
-					if len(other.deck) == 0 {
+					if !other.MaybeShuffle() {
 						return
 					}
 					c := other.deck[0]
@@ -727,8 +733,7 @@ Adventurer,6,Action
 					found := 0
 					trashi := 0
 					for i := 0; i < 2; i++ {
-						other.MaybeShuffle()
-						if len(other.deck) == 0 {
+						if !other.MaybeShuffle() {
 							break
 						}
 						c := other.deck[0]
@@ -845,15 +850,7 @@ Adventurer,6,Action
 		case "Adventurer":
 			add(func(game *Game) {
 				p := game.NowPlaying()
-				n := 2
-				for {
-					if n == 0 {
-						break
-					}
-					p.MaybeShuffle()
-					if len(p.deck) == 0 {
-						break
-					}
+				for n := 2; n > 0 && p.MaybeShuffle(); {
 					if isTreasure(p.deck[0]) {
 						fmt.Printf("%v puts %v in hand\n", p.name, p.deck[0].name)
 						p.hand = append(p.hand, p.deck[0])
@@ -1142,7 +1139,9 @@ func (consoleGamer) start(game *Game, p *Player) {
 							msg = "wrong phase"
 							break
 						}
-						buyMode = !buyMode
+						if inHand(p, isTreasure) {
+							buyMode = !buyMode
+						}
 					case '.':
 						return Command{"next", nil}
 					case '*':
