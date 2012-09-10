@@ -96,6 +96,48 @@ const (
 	phCleanup
 )
 
+func (game *Game) dump() {
+	cols := []int {3,3,1,3,3,3,1}
+	for _, c := range game.suplist {
+		fmt.Printf("  [%c] %v(%v) $%v", c.key, c.name, c.supply, c.cost)
+		cols[0]--
+		if cols[0] == 0 {
+			fmt.Println()
+			cols = cols[1:]
+		}
+	}
+	fmt.Printf("Player/Deck/Hand/Discard\n")
+	for _, p := range game.players {
+		fmt.Printf("%v/%v/%v/%v", p.name, len(p.deck), len(p.hand), len(p.discard))
+		if len(p.discard) > 0 {
+			fmt.Printf(":%v", p.discard[len(p.discard)-1].name)
+		}
+		fmt.Println("")
+	}
+}
+
+func (p *Player) dumpHand() {
+	fmt.Println("Hand:")
+	n := 0
+	for _, c := range p.hand {
+		fmt.Printf(" [%c] %v", c.key, c.name)
+		n = (n+1)%5
+		if n == 0 {
+			println()
+		}
+	}
+	if n != 0 {
+		println()
+	}
+	if len(p.played) > 0 {
+		fmt.Printf("Played:")
+		for _, c := range p.played {
+			fmt.Printf(" %v", c.name)
+		}
+		fmt.Println("");
+	}
+}
+
 func (game *Game) keyToCard(key byte) *Card {
 	for _, c := range game.suplist {
 		if key == c.key {
@@ -187,6 +229,7 @@ type Player struct {
 	a, b, c int
 	deck, hand, played, discard Pile
 	wait chan interface{}
+	hidden bool
 }
 
 // MaybeShuffle returns true if deck is non-empty, shuffling the discards
@@ -202,16 +245,29 @@ func (p *Player) MaybeShuffle() bool {
 	return true
 }
 
-func (p *Player) draw(n int) int {
-	if n == 0 {
-		return 0
-	}
+func (p *Player) drawOne() bool {
 	if !p.MaybeShuffle() {
-		return 0
+		return false
 	}
-	fmt.Printf("%v draws %v\n", p.name, p.deck[0].name)
-	p.hand, p.deck = append(p.hand, p.deck[0]), p.deck[1:]
-	return 1 + p.draw(n-1)
+	c := p.deck[0]
+	if !p.hidden {
+		fmt.Printf("%v draws [%c] %v\n", p.name, c.key, c.name)
+	}
+	p.hand, p.deck = append(p.hand, c), p.deck[1:]
+	return true
+}
+
+func (p *Player) draw(n int) int {
+	i := 0
+	for ; i < n; i++ {
+		if !p.drawOne() {
+			break
+		}
+	}
+	if p.hidden {
+		fmt.Printf("%v draws %v cards\n", p.name, i)
+	}
+	return i
 }
 
 func (p *Player) cleanup() {
@@ -865,12 +921,12 @@ Adventurer,6,Action
 		}
 	}
 
-	fmt.Println("Gominion")
+	fmt.Println("= Gominion =")
 
 	game := &Game{ch: make(chan Command)}
 	game.players = []*Player{
-		&Player{name:"Ben", fun:consoleGamer{}},
-		&Player{name:"AI", fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
+		&Player{name:"Ben", hidden:false, fun:consoleGamer{}},
+		&Player{name:"AI", hidden:true, fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
 	}
 	players := game.players
 
@@ -943,14 +999,13 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		presets = append(presets, pr)
 	}
 
-	fmt.Println("Available presets:")
+	fmt.Println("Picking preset:")
 	for _, pr := range presets {
 		fmt.Printf("  %v", pr.name)
 	}
 	fmt.Println();
 	pr := presets[rand.Intn(len(presets))]
 	fmt.Printf("Playing \"%v\"\n", pr.name)
-
 	for i, c := range pr.cards {
 		c.supply = 10
 		layout(c.name, keys[i])
@@ -963,14 +1018,16 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 			p.deck.Add("Copper")
 		}
 		p.deck.shuffle()
-		p.draw(5)
+		p.hand, p.deck = p.deck[:5], p.deck[5:]
 		p.wait = make(chan interface{})
 		go p.fun.start(game, p)
 	}
+	game.dump()
 
 	for game.n = 0;; game.n = (game.n+1) % len(players) {
 		p := game.NowPlaying()
 		p.a, p.b, p.c = 1, 1, 0
+		p.dumpHand()
 		for game.phase = phAction; game.phase <= phCleanup; {
 			cmd := game.getCommand(p)
 			switch cmd.s {
@@ -1027,41 +1084,12 @@ type consoleGamer struct {}
 
 func (consoleGamer) start(game *Game, p *Player) {
 	reader := bufio.NewReader(os.Stdin)
-	dump := func() {
-		for _, c := range game.suplist {
-			fmt.Printf("[%c] %v(%v) $%v\n", c.key, c.name, c.supply, c.cost)
-		}
-		fmt.Printf("Player/Deck/Hand/Discard\n")
-		for _, p := range game.players {
-			fmt.Printf("%v/%v/%v/%v", p.name, len(p.deck), len(p.hand), len(p.discard))
-			if len(p.discard) > 0 {
-				fmt.Printf(":%v", p.discard[len(p.discard)-1].name)
-			}
-			fmt.Println("")
-		}
-		fmt.Println("Hand:")
-		for _, c := range p.hand {
-			fmt.Printf("[%c] %v\n", c.key, c.name)
-		}
-		if len(p.played) > 0 {
-			fmt.Printf("Played:")
-			for _, c := range p.played {
-				fmt.Printf(" %v", c.name)
-			}
-			fmt.Println("");
-		}
-	}
 	i := 0
 	prog := ""
-	newTurn := true
 	wildCard := false
 	buyMode := false
 	for {
 		<-p.wait
-		if newTurn {
-			dump()
-			newTurn = false
-		}
 		game.ch <- func() Command {
 			// Automatically advance to next phase when it's obvious.
 			if !game.HasStack() {
@@ -1076,7 +1104,6 @@ func (consoleGamer) start(game *Game, p *Player) {
 					}
 				case phCleanup:
 					buyMode = false
-					newTurn = true
 					return Command{"next", nil}
 				default:
 					panic("unknown phase")
@@ -1118,7 +1145,8 @@ func (consoleGamer) start(game *Game, p *Player) {
 				case '\n':
 				case ' ':
 				case '?':
-					dump()
+					game.dump()
+					p.dumpHand()
 				default:
 					match = false
 				}
