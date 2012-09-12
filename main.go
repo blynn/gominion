@@ -96,6 +96,12 @@ const (
 	phCleanup
 )
 
+var phaseToString = map[int]string {
+	phAction:"action",
+	phBuy:"buy",
+	phCleanup:"cleanup",
+}
+
 func (game *Game) dump() {
 	cols := []int {3,3,1,3,3,3,1}
 	for _, c := range game.suplist {
@@ -228,8 +234,14 @@ type Player struct {
 	fun PlayFun
 	a, b, c int
 	deck, hand, played, discard Pile
-	wait chan interface{}
+	wait chan Event
 	hidden bool
+}
+
+type Event struct {
+	s string
+	card *Card
+        parse func(b byte) (Command, string)
 }
 
 // MaybeShuffle returns true if deck is non-empty, shuffling the discards
@@ -353,7 +365,13 @@ func (game *Game) Over() {
 }
 
 func (game *Game) getCommand(p *Player) Command {
-	p.wait <- nil
+	p.wait <- func() Event {
+		frame := game.StackTop()
+		if frame != nil {
+			return Event{s:"card", card:frame.card, parse:frame.Parse}
+		}
+		return Event{s:phaseToString[game.phase]}
+	}()
 	cmd := <-game.ch
 	if cmd.s == "quit" {
 		p.cleanup()
@@ -1019,7 +1037,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		}
 		p.deck.shuffle()
 		p.hand, p.deck = p.deck[:5], p.deck[5:]
-		p.wait = make(chan interface{})
+		p.wait = make(chan Event)
 		go p.fun.start(game, p)
 	}
 	game.dump()
@@ -1089,45 +1107,40 @@ func (consoleGamer) start(game *Game, p *Player) {
 	wildCard := false
 	buyMode := false
 	for {
-		<-p.wait
+		ev := <-p.wait
 		game.ch <- func() Command {
 			// Automatically advance to next phase when it's obvious.
-			if !game.HasStack() {
-				switch game.phase {
-				case phAction:
-					if p.a == 0 || !inHand(p, isAction) {
-						return Command{"next", nil}
-					}
-				case phBuy:
-					if p.b == 0 {
-						return Command{"next", nil}
-					}
-				case phCleanup:
-					buyMode = false
-					return Command{"next", nil}
-				default:
-					panic("unknown phase")
-				}
+			if ev.s == "action" && (p.a == 0 || !inHand(p, isAction)) {
+				return Command{"next", nil}
 			}
-			if game.phase == phBuy && !inHand(p, isTreasure) {
+			if ev.s == "buy" && p.b == 0 {
+				return Command{"next", nil}
+			}
+			if ev.s == "cleanup" {
+				return Command{"next", nil}
+			}
+			if ev.s != "buy" {
+				buyMode = false
+			} else if !inHand(p, isTreasure) {
 				buyMode = true
 			}
 
 			for {
 				if wildCard {
-					for k := len(p.hand)-1; k >= 0; k-- {
-						if isTreasure(p.hand[k]) {
-							return Command{"play", p.hand[k]}
+					if ev.s == "buy" {
+						for k := len(p.hand)-1; k >= 0; k-- {
+							if isTreasure(p.hand[k]) {
+								return Command{"play", p.hand[k]}
+							}
 						}
 					}
 					wildCard = false
 				}
 				i++
-				frame := game.StackTop()
 				for i >= len(prog) {
 					fmt.Printf("a:%v b:%v c:%v %v", p.a, p.b, p.c, p.name)
-					if frame != nil {
-						fmt.Printf(" %v", frame.card.name)
+					if ev.s == "card" {
+						fmt.Printf(" %v", ev.card.name)
 					}
 					fmt.Printf("> ")
 					s, err := reader.ReadString('\n')
@@ -1154,16 +1167,16 @@ func (consoleGamer) start(game *Game, p *Player) {
 					continue
 				}
 				msg := ""
-				if frame != nil {
+				if ev.s == "card" {
 					var cmd Command
-					if cmd, msg = frame.Parse(prog[i]); msg == "" {
+					if cmd, msg = ev.parse(prog[i]); msg == "" {
 						return cmd
 					}
 				} else {
 					switch prog[i] {
 					case '+': fallthrough
 					case ';':
-						if game.phase != phBuy {
+						if ev.s != "buy" {
 							msg = "wrong phase"
 							break
 						}
@@ -1173,7 +1186,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 					case '.':
 						return Command{"next", nil}
 					case '*':
-						if game.phase != phBuy {
+						if ev.s != "buy" {
 							msg = "wrong phase"
 							break
 						}
@@ -1224,37 +1237,38 @@ type simpleBuyer struct {
 
 func (this simpleBuyer) start(game *Game, p *Player) {
 	for {
-		<-p.wait
-		for {
-			frame := game.StackTop()
-			if frame == nil {
-				break
-			}
-			switch frame.card.name {
+		ev := <-p.wait
+		if ev.s == "card" {
+			switch ev.card.name {
 			case "Bureaucrat":
 				for _, c := range p.hand {
 					if isVictory(c) {
 						game.ch <- Command{"pick", c}
-						 <-p.wait
+						ev = <-p.wait
 						break
 					}
 				}
+				panic("unreachable")
 			case "Militia":
 				// TODO: Better discard strategy.
 				for i := 0; i < 3; i++ {
 					game.ch <- Command{"pick", p.hand[i]}
-					<-p.wait
+					ev = <-p.wait
 				}
 			default:
-				panic("AI unimplemented: " + frame.card.name)
+				panic("AI unimplemented: " + ev.card.name)
 			}
+			continue
 		}
 		game.ch<- func() Command {
-			if game.phase == phAction {
+			switch ev.s {
+			case "action":
+				return Command{"next", nil}
+			case "cleanup":
 				return Command{"next", nil}
 			}
-			if game.phase == phCleanup {
-				return Command{"next", nil}
+			if ev.s != "buy" {
+				panic("unknown event: " + ev.s)
 			}
 			if p.b == 0 {
 				return Command{"next", nil}
