@@ -144,6 +144,12 @@ func (p *Player) dumpHand() {
 	}
 }
 
+func (game *Game) TrashHand(p *Player, i int) {
+	fmt.Printf("%v trashes %v\n", p.name, p.hand[i].name)
+	game.trash = append(game.trash, p.hand[i])
+	p.hand = append(p.hand[:i], p.hand[i+1:]...)
+}
+
 func (game *Game) keyToCard(key byte) *Card {
 	for _, c := range game.suplist {
 		if key == c.key {
@@ -680,9 +686,7 @@ Adventurer,6,Action
 				selected := pickHand(game, p, 4, false, nil)
 				for i := len(p.hand)-1; i >= 0; i-- {
 					if selected[i] {
-						fmt.Printf("%v trashes %v\n", p.name, p.hand[i].name)
-						game.trash = append(game.trash, p.hand[i])
-						p.hand = append(p.hand[:i], p.hand[i+1:]...)
+						game.TrashHand(p, i)
 					}
 				}
 			})
@@ -757,9 +761,7 @@ Adventurer,6,Action
 				}
 				for i, c := range p.hand {
 					if isCopper(c) {
-						fmt.Printf("%v trashes %v\n", p.name, c.name)
-						game.trash = append(game.trash, p.hand[i])
-						p.hand = append(p.hand[:i], p.hand[i+1:]...)
+						game.TrashHand(p, i)
 						p.c += 3
 						return
 					}
@@ -774,9 +776,7 @@ Adventurer,6,Action
 				sel := pickHand(game, p, 1, true, nil)
 				for i, c := range p.hand {
 					if sel[i] {
-						fmt.Printf("%v trashes %v\n", p.name, c.name)
-						game.trash = append(game.trash, p.hand[i])
-						p.hand = append(p.hand[:i], p.hand[i+1:]...)
+						game.TrashHand(p, i)
 						pickGain(game, c.cost + 2)
 						return
 					}
@@ -905,9 +905,7 @@ Adventurer,6,Action
 				sel := pickHand(game, p, 1, true, f)
 				for i, c := range p.hand {
 					if sel[i] {
-						fmt.Printf("%v trashes %v\n", p.name, c.name)
-						game.trash = append(game.trash, p.hand[i])
-						p.hand = append(p.hand[:i], p.hand[i+1:]...)
+						game.TrashHand(p ,i)
 						choice := pickGainCond(game, c.cost + 3, f)
 						fmt.Printf("%v puts %v into hand\n", p.name, choice.name)
 						p.hand = append(p.hand, choice)
