@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
@@ -96,13 +98,8 @@ const (
 	phAction = iota
 	phBuy
 	phCleanup
+	phCard
 )
-
-var phaseToString = map[int]string {
-	phAction:"action",
-	phBuy:"buy",
-	phCleanup:"cleanup",
-}
 
 func (game *Game) dump() {
 	cols := []int {3,3,1,3,3,3,1}
@@ -242,14 +239,17 @@ type Player struct {
 	fun PlayFun
 	a, b, c int
 	deck, hand, played, discard Pile
-	wait chan Event
+	tv chan Event
 	hidden bool
+	n int
 }
 
 type Event struct {
 	s string
 	card *Card
 	parse func(b byte) (Command, string)
+	n int
+	phase int
 }
 
 // MaybeShuffle returns true if deck is non-empty, shuffling the discards
@@ -373,12 +373,12 @@ func (game *Game) Over() {
 }
 
 func (game *Game) getCommand(p *Player) Command {
-	p.wait <- func() Event {
+	p.tv <- func() Event {
 		frame := game.StackTop()
 		if frame != nil {
-			return Event{s:"card", card:frame.card, parse:frame.Parse}
+			return Event{s:"go", phase:phCard, card:frame.card, parse:frame.Parse}
 		}
-		return Event{s:phaseToString[game.phase]}
+		return Event{s:"go", n:p.n, phase:game.phase}
 	}()
 	cmd := <-game.ch
 	if cmd.s == "quit" {
@@ -575,6 +575,11 @@ func (game *Game) getBool(p *Player) bool {
 }
 
 func main() {
+	flag.Parse()
+	if flag.NArg() > 0 {
+		client()
+		return
+	}
 	rand.Seed(time.Now().Unix())
 	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
 		KindDict[s] = &Kind{s}
@@ -957,7 +962,7 @@ Adventurer,6,Action
 		fmt.Fprintf(w, <-ng.out)
 	})
 
-	http.HandleFunc("/command", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/cmd", func(w http.ResponseWriter, r *http.Request) {
 		s := r.FormValue("s")
 		if s == "" {
 			fmt.Fprintf(w, "error: no command")
@@ -1074,7 +1079,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		c.supply = 10
 		layout(c.name, keys[i])
 	}
-	for _, p := range players {
+	for i, p := range players {
 		for i := 0; i < 3; i++ {
 			p.deck.Add("Estate")
 		}
@@ -1083,16 +1088,27 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		}
 		p.deck.shuffle()
 		p.hand, p.deck = p.deck[:5], p.deck[5:]
-		p.wait = make(chan Event)
+		p.tv = make(chan Event)
+		p.n = i;
 		go p.fun.start(game, p)
+		p.tv <- Event{s:"new"}
 	}
-	game.dump()
+
+	broadcast := func(ev Event) {
+		for _, p := range players {
+			p.tv <- ev
+		}
+	}
 
 	for game.n = 0;; game.n = (game.n+1) % len(players) {
 		p := game.NowPlaying()
 		p.a, p.b, p.c = 1, 1, 0
-		p.dumpHand()
+		first := true
 		for game.phase = phAction; game.phase <= phCleanup; {
+			if first {
+				broadcast(Event{s:"phase", phase:game.phase, n:game.n})
+				first = false
+			}
 			cmd := game.getCommand(p)
 			switch cmd.s {
 				case "buy":
@@ -1120,6 +1136,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 					}
 				case "next":
 					game.phase++
+					first = true
 			}
 		}
 		fmt.Printf("%v cleans up\n", p.name)
@@ -1147,25 +1164,37 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 type consoleGamer struct {}
 
 func (consoleGamer) start(game *Game, p *Player) {
+	<-p.tv
+	game.dump()
 	reader := bufio.NewReader(os.Stdin)
 	i := 0
 	prog := ""
 	wildCard := false
 	buyMode := false
 	for {
-		ev := <-p.wait
+		ev := <-p.tv
+		if ev.s == "phase" {
+			fmt.Printf("[player %v; phase %v]\n", ev.n, ev.phase)
+			if ev.n == p.n && ev.phase == phAction {
+				p.dumpHand()
+			}
+			continue
+		}
+		if ev.s != "go" {
+			continue
+		}
 		game.ch <- func() Command {
 			// Automatically advance to next phase when it's obvious.
-			if ev.s == "action" && (p.a == 0 || !inHand(p, isAction)) {
+			if ev.phase == phAction && (p.a == 0 || !inHand(p, isAction)) {
 				return Command{"next", nil}
 			}
-			if ev.s == "buy" && p.b == 0 {
+			if ev.phase == phBuy && p.b == 0 {
 				return Command{"next", nil}
 			}
-			if ev.s == "cleanup" {
+			if ev.phase == phCleanup {
 				return Command{"next", nil}
 			}
-			if ev.s != "buy" {
+			if ev.phase != phBuy {
 				buyMode = false
 			} else if !inHand(p, isTreasure) {
 				buyMode = true
@@ -1173,7 +1202,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 
 			for {
 				if wildCard {
-					if ev.s == "buy" {
+					if ev.phase == phBuy {
 						for k := len(p.hand)-1; k >= 0; k-- {
 							if isTreasure(p.hand[k]) {
 								return Command{"play", p.hand[k]}
@@ -1185,7 +1214,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 				i++
 				for i >= len(prog) {
 					fmt.Printf("a:%v b:%v c:%v %v", p.a, p.b, p.c, p.name)
-					if ev.s == "card" {
+					if ev.phase == phCard {
 						fmt.Printf(" %v", ev.card.name)
 					}
 					fmt.Printf("> ")
@@ -1213,7 +1242,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 					continue
 				}
 				msg := ""
-				if ev.s == "card" {
+				if ev.phase == phCard {
 					var cmd Command
 					if cmd, msg = ev.parse(prog[i]); msg == "" {
 						return cmd
@@ -1222,7 +1251,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 					switch prog[i] {
 					case '+': fallthrough
 					case ';':
-						if ev.s != "buy" {
+						if ev.phase != phBuy {
 							msg = "wrong phase"
 							break
 						}
@@ -1232,7 +1261,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 					case '.':
 						return Command{"next", nil}
 					case '*':
-						if ev.s != "buy" {
+						if ev.phase != phBuy {
 							msg = "wrong phase"
 							break
 						}
@@ -1282,15 +1311,19 @@ type simpleBuyer struct {
 }
 
 func (this simpleBuyer) start(game *Game, p *Player) {
+	<-p.tv
 	for {
-		ev := <-p.wait
-		if ev.s == "card" {
+		ev := <-p.tv
+		if ev.s != "go"{
+			continue
+		}
+		if ev.phase == phCard {
 			switch ev.card.name {
 			case "Bureaucrat":
 				for _, c := range p.hand {
 					if isVictory(c) {
 						game.ch <- Command{"pick", c}
-						ev = <-p.wait
+						ev = <-p.tv
 						break
 					}
 				}
@@ -1299,7 +1332,7 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 				// TODO: Better discard strategy.
 				for i := 0; i < 3; i++ {
 					game.ch <- Command{"pick", p.hand[i]}
-					ev = <-p.wait
+					ev = <-p.tv
 				}
 			default:
 				panic("AI unimplemented: " + ev.card.name)
@@ -1307,13 +1340,13 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 			continue
 		}
 		game.ch<- func() Command {
-			switch ev.s {
-			case "action":
+			switch ev.phase {
+			case phAction:
 				return Command{"next", nil}
-			case "cleanup":
+			case phCleanup:
 				return Command{"next", nil}
 			}
-			if ev.s != "buy" {
+			if ev.phase != phBuy {
 				panic("unknown event: " + ev.s)
 			}
 			if p.b == 0 {
@@ -1341,16 +1374,29 @@ type netGamer struct {
 }
 
 func (this netGamer) start(game *Game, p *Player) {
+	var q []Event
+	<-p.tv
 	ready := false
 	for {
 		select {
+		case ev := <-p.tv:
+			q = append(q, ev)
 		case cmd := <-this.in:
 			switch cmd.s {
 			case "poll":
-				if ready {
-					this.out <- "ready"
-				} else {
-					this.out <- "wait"
+				if len(q) == 0 {
+					if ready {
+						this.out <- "Go!"
+					} else {
+						this.out <- "wait"
+					}
+					break
+				}
+				ev := q[0]
+				this.out <- fmt.Sprintf("%v %v %v", ev.s, ev.n, ev.phase)
+				q = q[1:]
+				if ev.s == "go" {
+					ready = true
 				}
 			case "status":
 				this.out <- "TODO"
@@ -1363,8 +1409,30 @@ func (this netGamer) start(game *Game, p *Player) {
 					this.out <- "sent"
 				}
 			}
-		case <-p.wait:
-			ready = true
 		}
+	}
+}
+
+func client() {
+	send := func(u string) string {
+		resp, err := http.Get(u)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return string(body)
+	}
+	for {
+		s := send("http://:8080/poll")
+		if s == "wait" {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		log.Print(s)
+		send("http://:8080/cmd?s=next")
 	}
 }
