@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -247,7 +249,7 @@ type Player struct {
 type Event struct {
 	s string
 	card *Card
-        parse func(b byte) (Command, string)
+	parse func(b byte) (Command, string)
 }
 
 // MaybeShuffle returns true if deck is non-empty, shuffling the discards
@@ -938,13 +940,59 @@ Adventurer,6,Action
 	}
 
 	fmt.Println("= Gominion =")
-
 	game := &Game{ch: make(chan Command)}
+	ng := netGamer{
+		in: make(chan Command),
+		out: make(chan string),
+	}
 	game.players = []*Player{
+		&Player{name:"Anonymous", hidden:false, fun:ng},
 		&Player{name:"Ben", hidden:false, fun:consoleGamer{}},
 		&Player{name:"AI", hidden:true, fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
 	}
 	players := game.players
+
+	http.HandleFunc("/poll", func(w http.ResponseWriter, r *http.Request) {
+		ng.in <- Command{s:"poll"}
+		fmt.Fprintf(w, <-ng.out)
+	})
+
+	http.HandleFunc("/command", func(w http.ResponseWriter, r *http.Request) {
+		s := r.FormValue("s")
+		if s == "" {
+			fmt.Fprintf(w, "error: no command")
+			return
+		}
+		cmd := Command{s:s}
+		if c := r.FormValue("c"); c != "" {
+			if len(c) != 1 {
+				fmt.Fprintf(w, "error: malformed card")
+			}
+			cmd.c = game.keyToCard(c[0])
+			if cmd.c == nil {
+				fmt.Fprintf(w, "error: no such card")
+				return
+			}
+		}
+		ng.in <- cmd
+		fmt.Fprintf(w, <-ng.out)
+	})
+
+  go func() {
+		log.Fatal(http.ListenAndServe(":8080", nil))
+	}()
+	for n := 0;; n++ {
+		resp, err := http.Get("http://:8080/")
+		if err != nil {
+			if n > 3 {
+				log.Fatal("failed to connect 3 times: ", err)
+			}
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		defer resp.Body.Close()
+		break;
+	}
 
 	setSupply := func(s string, n int) {
 		c, ok := CardDict[s]
@@ -1284,5 +1332,39 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 			}
 			return Command{"next", nil}
 		}()
+	}
+}
+
+type netGamer struct {
+	in chan Command
+	out chan string
+}
+
+func (this netGamer) start(game *Game, p *Player) {
+	ready := false
+	for {
+		select {
+		case cmd := <-this.in:
+			switch cmd.s {
+			case "poll":
+				if ready {
+					this.out <- "ready"
+				} else {
+					this.out <- "wait"
+				}
+			case "status":
+				this.out <- "TODO"
+			default:
+				if !ready {
+					this.out <- "error: not ready"
+				} else {
+					ready = false
+					game.ch<-cmd;
+					this.out <- "sent"
+				}
+			}
+		case <-p.wait:
+			ready = true
+		}
 	}
 }
