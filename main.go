@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -92,6 +93,7 @@ type Game struct {
 	phase int
 	stack []*Frame
 	trash Pile
+        isServer bool
 }
 
 const (
@@ -158,16 +160,25 @@ func (game *Game) keyToCard(key byte) *Card {
 	return nil
 }
 
-func (game *Game) multiplay(k int, n int) {
-	p := game.NowPlaying()
-	c := p.hand[k]
-	p.hand = append(p.hand[:k], p.hand[k+1:]...)
+func (game *Game) MultiPlay(n int, c *Card, m int) {
+	p := game.players[n]
+	if !p.hidden {
+		var k int
+		for k = len(p.hand)-1; k >= 0; k-- {
+			if p.hand[k] == c {
+				p.hand = append(p.hand[:k], p.hand[k+1:]...)
+				break
+			}
+		}
+		if k < 0 {
+			panic("unplayable")
+		}
+	}
 	p.played = append(p.played, c)
 	if isAction(c) {
 		p.a--
 	}
-	for ;n > 0; n-- {
-		fmt.Printf("%v plays %v\n", p.name, c.name)
+	for ;m > 0; m-- {
 		if c.act == nil {
 			fmt.Printf("%v unimplemented  :(\n", c.name)
 			return
@@ -180,24 +191,35 @@ func (game *Game) multiplay(k int, n int) {
 	}
 }
 
-func (game *Game) play(k int) {
-	game.multiplay(k, 1)
+func (game *Game) Play(n int, c *Card) {
+	game.cast(Event{s:"play", card:c, n:n})
+	game.MultiPlay(n, c, 1)
+}
+
+func (game *Game) Spend(n int, c *Card) {
+	game.cast(Event{s:"buy", card:c, n:game.n})
+	p := game.players[n]
+	p.c -= c.cost
+	p.b--
 }
 
 func (game Game) addCoins(n int) {
+	game.cast(Event{s:"+C", n:game.n, i:n})
 	game.NowPlaying().c += n
 }
 
 func (game Game) addActions(n int) {
+	game.cast(Event{s:"+A", n:game.n, i:n})
 	game.NowPlaying().a += n
 }
 
 func (game Game) addBuys(n int) {
+	game.cast(Event{s:"+B", n:game.n, i:n})
 	game.NowPlaying().b += n
 }
 
 func (game Game) addCards(n int) {
-	game.NowPlaying().draw(n)
+	game.draw(game.NowPlaying(), n)
 }
 
 func (game *Game) SetParse(fun func(b byte) (Command, string)) {
@@ -250,6 +272,7 @@ type Event struct {
 	parse func(b byte) (Command, string)
 	n int
 	phase int
+	i int
 }
 
 // MaybeShuffle returns true if deck is non-empty, shuffling the discards
@@ -265,36 +288,42 @@ func (p *Player) MaybeShuffle() bool {
 	return true
 }
 
-func (p *Player) drawOne() bool {
+func (game *Game) drawOne(p *Player) bool {
 	if !p.MaybeShuffle() {
 		return false
 	}
 	c := p.deck[0]
-	if !p.hidden {
-		fmt.Printf("%v draws [%c] %v\n", p.name, c.key, c.name)
-	}
-	p.hand, p.deck = append(p.hand, c), p.deck[1:]
+	p.deck, p.hand = p.deck[1:], append(p.hand, c)
 	return true
 }
 
-func (p *Player) draw(n int) int {
+func (game *Game) draw(p *Player, n int) int {
 	i := 0
 	for ; i < n; i++ {
-		if !p.drawOne() {
+		if !game.drawOne(p) {
 			break
 		}
 	}
-	if p.hidden {
-		fmt.Printf("%v draws %v cards\n", p.name, i)
+	if i > 0 {
+		game.cast(Event{s:"draw", n:game.n, i:i})
 	}
 	return i
 }
 
-func (p *Player) cleanup() {
+func (game *Game) Cleanup(p *Player) {
+	game.cast(Event{s:"cleanup", n:game.n})
 	p.discard, p.played = append(p.discard, p.played...), nil
 	p.discard, p.hand = append(p.discard, p.hand...), nil
-	p.draw(5)
 }
+
+func (game *Game) cast(ev Event) {
+	for _, p := range game.players {
+		if p.tv != nil {
+			p.tv <- ev
+		}
+	}
+}
+
 
 func getKind(s string) *Kind {
 	k, ok := KindDict[s]
@@ -382,7 +411,7 @@ func (game *Game) getCommand(p *Player) Command {
 	}()
 	cmd := <-game.ch
 	if cmd.s == "quit" {
-		p.cleanup()
+		game.Cleanup(p)
 		game.Over()
 		os.Exit(0)
 	}
@@ -456,7 +485,7 @@ func (game *Game) Gain(p *Player, c *Card) {
 	if c.supply == 0 {
 		panic("out of supply")
 	}
-	fmt.Printf("%v gains %v\n", p.name, c.name)
+	game.cast(Event{s:"gain", card:c, n:game.n})
 	p.discard = append(p.discard, c)
 	c.supply--
 }
@@ -575,12 +604,6 @@ func (game *Game) getBool(p *Player) bool {
 }
 
 func main() {
-	flag.Parse()
-	if flag.NArg() > 0 {
-		client()
-		return
-	}
-	rand.Seed(time.Now().Unix())
 	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
 		KindDict[s] = &Kind{s}
 	}
@@ -685,7 +708,7 @@ Adventurer,6,Action
 						n++
 					}
 				}
-				p.draw(n)
+				game.draw(p, n)
 			})
 		case "Chapel":
 			add(func(game *Game) {
@@ -867,15 +890,15 @@ Adventurer,6,Action
 				})
 				for i, _ := range p.hand {
 					if sel[i] {
-						p.a++  // Compensate for Action deducted by multiplay().
-						game.multiplay(i, 2)
+						p.a++  // Compensate for Action deducted by MultiPlay().
+						game.MultiPlay(p.n, p.hand[i], 2)
 						return
 					}
 				}
 			})
 		case "Council Room":
 			add(func(game *Game) {
-				game.ForOthers(func(other *Player) { other.draw(1) })
+				game.ForOthers(func(other *Player) { game.draw(other, 1) })
 			})
 		case "Library":
 			add(func(game *Game) {
@@ -885,7 +908,7 @@ Adventurer,6,Action
 					if len(p.hand) == 7 {
 						break
 					}
-					if p.draw(1) == 0 {
+					if game.draw(p, 1) == 0 {
 						break
 					}
 					c := p.hand[len(p.hand)-1]
@@ -944,16 +967,23 @@ Adventurer,6,Action
 		}
 	}
 
+	flag.Parse()
+	if flag.NArg() > 0 {
+		client()
+		return
+	}
+
 	fmt.Println("= Gominion =")
-	game := &Game{ch: make(chan Command)}
+	rand.Seed(time.Now().Unix())
+	game := &Game{ch: make(chan Command), isServer: true}
 	ng := netGamer{
 		in: make(chan Command),
 		out: make(chan string),
 	}
 	game.players = []*Player{
-		&Player{name:"Anonymous", hidden:false, fun:ng},
-		&Player{name:"Ben", hidden:false, fun:consoleGamer{}},
-		&Player{name:"AI", hidden:true, fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
+		&Player{name:"Anonymous", fun:ng},
+		&Player{name:"Ben", fun:consoleGamer{}},
+		//&Player{name:"AI", fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
 	}
 	players := game.players
 
@@ -1079,6 +1109,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		c.supply = 10
 		layout(c.name, keys[i])
 	}
+setSupply("Province", 1)
 	for i, p := range players {
 		for i := 0; i < 3; i++ {
 			p.deck.Add("Estate")
@@ -1094,19 +1125,13 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		p.tv <- Event{s:"new"}
 	}
 
-	broadcast := func(ev Event) {
-		for _, p := range players {
-			p.tv <- ev
-		}
-	}
-
 	for game.n = 0;; game.n = (game.n+1) % len(players) {
 		p := game.NowPlaying()
 		p.a, p.b, p.c = 1, 1, 0
 		first := true
 		for game.phase = phAction; game.phase <= phCleanup; {
 			if first {
-				broadcast(Event{s:"phase", phase:game.phase, n:game.n})
+				game.cast(Event{s:"phase", phase:game.phase, n:game.n})
 				first = false
 			}
 			cmd := game.getCommand(p)
@@ -1116,31 +1141,19 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 					if err := CanBuy(game, choice); err != "" {
 						panic(err)
 					}
-					fmt.Printf("%v spends %v coins\n", p.name, choice.cost)
-					p.c -= choice.cost
-					p.b--
+					game.Spend(game.n, choice)
 					game.Gain(p, choice)
 				case "play":
 					if err := CanPlay(game, cmd.c); err != "" {
 						panic(err)
 					}
-					var k int
-					for k = len(p.hand)-1; k >= 0; k-- {
-						if p.hand[k] == cmd.c {
-							game.play(k)
-							break
-						}
-					}
-					if k < 0 {
-						panic("unplayable")
-					}
+					game.Play(game.n, cmd.c)
 				case "next":
 					game.phase++
 					first = true
 			}
 		}
-		fmt.Printf("%v cleans up\n", p.name)
-		p.cleanup()
+		game.Cleanup(p)
 		n := 0
 		for _, c := range game.suplist {
 			if c.supply == 0 {
@@ -1158,6 +1171,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 			game.Over()
 			return
 		}
+		game.draw(p, 5)
 	}
 }
 
@@ -1173,17 +1187,29 @@ func (consoleGamer) start(game *Game, p *Player) {
 	buyMode := false
 	for {
 		ev := <-p.tv
-		if ev.s == "phase" {
-			fmt.Printf("[player %v; phase %v]\n", ev.n, ev.phase)
+		switch ev.s {
+		case "phase":
 			if ev.n == p.n && ev.phase == phAction {
 				p.dumpHand()
 			}
-			continue
-		}
-		if ev.s != "go" {
-			continue
-		}
-		game.ch <- func() Command {
+		case "play":
+			fmt.Printf("%v plays %v\n", game.players[ev.n].name, ev.card.name)
+		case "gain":
+			fmt.Printf("%v gains %v\n", game.players[ev.n].name, ev.card.name)
+		case "buy":
+			fmt.Printf("%v buys %v for $%v\n", game.players[ev.n].name, ev.card.name, ev.card.cost)
+		case "draw":
+			if p.n != ev.n {
+				fmt.Printf("%v draws %v cards\n", game.players[ev.n].name, ev.i)
+			} else {
+				for i := ev.i; i > 0; i-- {
+					c := p.hand[len(p.hand)-i]
+					fmt.Printf("%v draws [%c] %v\n", p.name, c.key, c.name)
+				}
+			}
+		case "cleanup":
+			fmt.Printf("%v cleans up\n", game.players[ev.n].name)
+		case "go": game.ch <- func() Command {
 			// Automatically advance to next phase when it's obvious.
 			if ev.phase == phAction && (p.a == 0 || !inHand(p, isAction)) {
 				return Command{"next", nil}
@@ -1281,6 +1307,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 						if msg = CanPlay(game, c); msg != "" {
 							break
 						}
+						// TODO: Move this to CanPlay().
 						var k int
 						for k = len(p.hand)-1; k >= 0; k-- {
 							if p.hand[k] == c {
@@ -1303,6 +1330,9 @@ func (consoleGamer) start(game *Game, p *Player) {
 			}
 			panic("unreachable")
 		}()
+		default:
+			log.Printf("ignoring event %q", ev.s)
+		}
 	}
 }
 
@@ -1373,9 +1403,32 @@ type netGamer struct {
 	out chan string
 }
 
+func encodeKingdom(game *Game) string {
+	s := ""
+	for _, c := range game.suplist {
+		s += fmt.Sprintf("%v,%v,%v\n", c.name, c.supply, c.key)
+	}
+	return s
+}
+
+func encodeHand(p *Player) string {
+	s := ""
+	for _, c := range p.hand {
+		s += string(c.key)
+	}
+	return s + "\n"
+}
+
+func encodePlayers(ps []*Player) string {
+	s := ""
+	for _, p := range ps {
+		s += p.name + "\n"
+	}
+	return s
+}
+
 func (this netGamer) start(game *Game, p *Player) {
 	var q []Event
-	<-p.tv
 	ready := false
 	for {
 		select {
@@ -1393,13 +1446,42 @@ func (this netGamer) start(game *Game, p *Player) {
 					break
 				}
 				ev := q[0]
-				this.out <- fmt.Sprintf("%v %v %v", ev.s, ev.n, ev.phase)
 				q = q[1:]
-				if ev.s == "go" {
+				switch ev.s {
+				case "new":
+					this.out <- "new\n= Players =\n" + encodePlayers(game.players) + "= Kingdom =\n" + encodeKingdom(game) + "= Hand =\n" + encodeHand(p)
+				case "go":
 					ready = true
+				  fallthrough
+				case "phase":
+					this.out <- fmt.Sprintf("%v\n%v,%v\n", ev.s, ev.n, ev.phase)
+				case "cleanup":
+					this.out <- fmt.Sprintf("%v\n%v\n", ev.s, ev.n)
+				case "play":
+				  fallthrough
+				case "buy":
+				  fallthrough
+				case "gain":
+					this.out <- fmt.Sprintf("%v\n%v,%c\n", ev.s, ev.n, ev.card.key)
+				case "draw":
+					s := ""
+					for i := ev.i; i > 0; i-- {
+						if p.n == ev.n {
+							s += string(p.hand[len(p.hand) - i].key)
+						} else {
+							s += "?"
+						}
+					}
+					this.out <- fmt.Sprintf("%v\n%v,%v\n", ev.s, ev.n, s)
+				case "+C":
+					fallthrough
+				case "+A":
+					fallthrough
+				case "+B":
+					this.out <- fmt.Sprintf("%v\n%v,%v\n", ev.s, ev.n, ev.i)
+				default:
+					this.out <- "BUG"
 				}
-			case "status":
-				this.out <- "TODO"
 			default:
 				if !ready {
 					this.out <- "error: not ready"
@@ -1426,13 +1508,140 @@ func client() {
 		}
 		return string(body)
 	}
+	var game *Game
+	var p *Player
 	for {
-		s := send("http://:8080/poll")
-		if s == "wait" {
-			time.Sleep(100 * time.Millisecond)
+		body := send("http://:8080/poll")
+		if body == "wait" {
+			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-		log.Print(s)
-		send("http://:8080/cmd?s=next")
+		v := strings.Split(body, "\n")
+		splitComma := func() []string {
+			if len(v) < 2 {
+				log.Fatalf("malformed response: %q", body)
+			}
+			return strings.Split(v[1], ",")
+		}
+		if len(v) == 0 {
+			log.Printf("malformed response: %q", body)
+			continue
+		}
+		switch v[0] {
+		case "new":
+			game = &Game{ch: make(chan Command)}
+			p = &Player{name:"Anonymous", fun:consoleGamer{}, tv:make(chan Event)}
+			heading := ""
+			for _, line := range v[1:] {
+				if len(line) == 0 {
+					continue
+				}
+				re := regexp.MustCompile("= (.*) =")
+				if h := re.FindStringSubmatch(line); h != nil {
+					heading = h[1]
+					continue
+				}
+				switch heading {
+				case "Players":
+					if line == p.name {
+						game.players = append(game.players, p)
+					} else {
+						game.players = append(game.players, &Player{name:line, hidden:true})
+					}
+				case "Hand":
+					for _, c := range []byte(line) {
+						p.hand = append(p.hand, game.keyToCard(c))
+					}
+				case "Kingdom":
+					w := strings.Split(line, ",")
+					if len(w) != 3 {
+						log.Printf("malformed line: %q", line)
+						break
+					}
+					c := GetCard(w[0])
+					game.suplist = append(game.suplist, c)
+					c.supply = PanickyAtoi(w[1])
+					c.key = byte(PanickyAtoi(w[2]))
+				default:
+					log.Printf("unknown heading: %q", heading)
+				}
+			}
+			go p.fun.start(game, p)
+			p.tv <- Event{s:"new"}
+		case "buy":
+			w := splitComma()
+			ev := Event{s:"buy", n:PanickyAtoi(w[0]), card:game.keyToCard(w[1][0])}
+			game.Spend(ev.n, ev.card)
+		case "cleanup":
+			if len(v) < 2 {
+				log.Printf("malformed response: %q", body)
+				continue
+			}
+			ev := Event{s:"cleanup", n:PanickyAtoi(v[1])}
+			game.Cleanup(game.players[ev.n])
+		case "gain":
+			w := splitComma()
+			ev := Event{s:"gain", n:PanickyAtoi(w[0]), card:game.keyToCard(w[1][0])}
+			game.Gain(game.players[ev.n], ev.card)
+		case "play":
+			w := splitComma()
+			ev := Event{s:"play", n:PanickyAtoi(w[0]), card:game.keyToCard(w[1][0])}
+			if p.n == ev.n {
+				var k int
+				for k = len(p.hand)-1; k >= 0; k-- {
+					if p.hand[k] == ev.card {
+						p.hand = append(p.hand[:k], p.hand[k+1:]...)
+						break
+					}
+				}
+				if k < 0 {
+					panic("unplayable")
+				}
+			}
+			p.tv <- ev
+		case "phase":
+			w := splitComma()
+			ev := Event{s:"phase", n:PanickyAtoi(w[0]), phase:PanickyAtoi(w[1])}
+			game.n, game.phase = ev.n, ev.phase
+			if ev.n == p.n && ev.phase == phAction {
+				p.a, p.b, p.c = 1, 1, 0
+			}
+			p.tv <- ev
+		case "go":
+			w := splitComma()
+			p.tv <- Event{s:"go", n:PanickyAtoi(w[0]), phase:PanickyAtoi(w[1])}
+			cmd := <-game.ch
+			u := "http://:8080/cmd?s=" + cmd.s
+			if cmd.c != nil {
+				u += "&c=" + string(cmd.c.key)
+			}
+		  send(u)
+		case "draw":
+			w := splitComma()
+			ev := Event{s:"draw", n:PanickyAtoi(w[0]), i:len(w[1])}
+			if ev.n == p.n {
+				for _, b := range []byte(w[1]) {
+					p.hand = append(p.hand, game.keyToCard(b))
+				}
+			}
+			p.tv <- ev
+		case "+A":
+			w := splitComma()
+			if p.n == PanickyAtoi(w[0]) {
+				p.a += PanickyAtoi(w[1])
+			}
+		case "+B":
+			w := splitComma()
+			if p.n == PanickyAtoi(w[0]) {
+				p.b += PanickyAtoi(w[1])
+			}
+		case "+C":
+			w := splitComma()
+			if p.n == PanickyAtoi(w[0]) {
+				p.c += PanickyAtoi(w[1])
+			}
+		default:
+			log.Fatalf("unknown: %q", body)
+		}
 	}
 }
