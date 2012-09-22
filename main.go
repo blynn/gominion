@@ -799,7 +799,7 @@ Adventurer,6,Action
 					for i := len(other.hand)-1; i >= 0; i-- {
 						if sel[i] {
 							fmt.Printf("%v decks %v\n", other.name, other.hand[i].name)
-							other.deck = append(other.deck, other.hand[i])
+							other.deck = append(other.hand[i:i+1], other.deck...)
 							other.hand = append(other.hand[:i], other.hand[i+1:]...)
 							break
 						}
@@ -995,7 +995,7 @@ Adventurer,6,Action
 			})
 		case "Witch":
 			add(func(game *Game) {
-				game.ForOthers(func(other *Player) { game.GainIfPossible(other, GetCard("Curse")) })
+				game.attack(func(other *Player) { game.GainIfPossible(other, GetCard("Curse")) })
 			})
 		case "Adventurer":
 			add(func(game *Game) {
