@@ -342,6 +342,19 @@ func (game *Game) reveal(p *Player) *Card {
 	return c
 }
 
+func (game *Game) revealHand(p *Player) {
+	for _, c := range p.hand {
+		if !game.isServer {
+			game.foo <- Event{s:"go"}
+			cmd := <-game.ch
+			fmt.Printf("%v reveals %v\n", p.name, cmd.c.name)
+			continue
+		}
+		fmt.Printf("%v reveals %v\n", p.name, c.name)
+		game.cast(Event{s:"cmd", cmd:"reveal", n:p.n, card:c})
+	}
+}
+
 func (game *Game) Cleanup(p *Player) {
 	//game.cast(Event{s:"cleanup", n:game.n})
 	p.discard, p.played = append(p.discard, p.played...), nil
@@ -819,10 +832,7 @@ Adventurer,6,Action
 				game.GainIfPossible(p, GetCard("Silver"))
 				game.attack(func(other *Player) {
 					if !game.inHand(other, isVictory) {
-						// TODO: This will crash if other.hidden.
-						for _, c := range other.hand {
-							fmt.Printf("%v reveals %v\n", other.name, c.name)
-						}
+						game.revealHand(other)
 						return
 					}
 					sel := pickHand(game, other, 1, true, func(c *Card) string {
@@ -918,10 +928,7 @@ Adventurer,6,Action
 					var v []*Card
 					found := 0
 					trashi := 0
-					for i := 0; i < 2; i++ {
-						if !other.MaybeShuffle() {
-							break
-						}
+					for i := 0; i < 2 && other.MaybeShuffle(); i++ {
 						c := game.reveal(other)
 						other.deck = other.deck[1:]
 						v = append(v, c)
@@ -1034,13 +1041,14 @@ Adventurer,6,Action
 			add(func(game *Game) {
 				p := game.NowPlaying()
 				for n := 2; n > 0 && p.MaybeShuffle(); {
-					if isTreasure(p.deck[0]) {
-						fmt.Printf("%v puts %v in hand\n", p.name, p.deck[0].name)
-						p.hand = append(p.hand, p.deck[0])
+					c := game.reveal(p)
+					if isTreasure(c) {
+						fmt.Printf("%v puts %v in hand\n", p.name, c.name)
+						p.hand = append(p.hand, c)
 						n--
 					} else {
-						fmt.Printf("%v discards %v\n", p.name, p.deck[0].name)
-						p.discard = append(p.discard, p.deck[0])
+						fmt.Printf("%v discards %v\n", p.name, c.name)
+						p.discard = append(p.discard, c)
 					}
 					p.deck = p.deck[1:]
 				}
@@ -1201,7 +1209,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 	}
 	fmt.Println();
 	//pr := presets[rand.Intn(len(presets))]
-	pr := presets[2]
+	pr := presets[1]
 	fmt.Printf("Playing \"%v\"\n", pr.name)
 	for i, c := range pr.cards {
 		c.supply = 10
