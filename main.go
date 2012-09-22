@@ -94,8 +94,9 @@ type Game struct {
 	stack []*Frame
 	trash Pile
 	drawFun func (game *Game, p *Player, n int) int
-	frameFun func (game *Game, cmd *Command)
+	frameFun func (game *Game, p *Player,  cmd *Command)
 	isServer bool
+	foo chan Event
 }
 
 const (
@@ -295,7 +296,7 @@ func (p *Player) MaybeShuffle() bool {
 		if len(p.discard) == 0 {
 			return false
 		}
-		p.deck, p.discard = p.discard, p.deck
+		p.deck, p.discard = p.discard, nil
 		p.deck.shuffle()
 	}
 	return true
@@ -317,12 +318,28 @@ func serverDraw(game *Game, p *Player, n int) int {
 			break
 		}
 	}
-	game.cast(Event{s:"draw", n:game.n, i:i})
+	game.cast(Event{s:"draw", n:p.n, i:i})
 	return i
 }
 
 func (game *Game) draw(p *Player, n int) int {
 	return game.drawFun(game, p, n)
+}
+
+func (game *Game) reveal(p *Player) *Card {
+	if !p.MaybeShuffle() {
+		log.Fatalf("should check for empty deck before reveal")
+	}
+	if !game.isServer {
+		game.foo <- Event{s:"go"}
+		cmd := <-game.ch
+		fmt.Printf("%v reveals %v\n", p.name, cmd.c.name)
+		return cmd.c
+	}
+	c := p.deck[0]
+	fmt.Printf("%v reveals %v\n", p.name, c.name)
+	game.cast(Event{s:"cmd", cmd:"reveal", n:p.n, card:c})
+	return c
 }
 
 func (game *Game) Cleanup(p *Player) {
@@ -422,7 +439,7 @@ func (game *Game) getCommand(p *Player) Command {
 		return Event{s:"go", phase:game.phase}
 	}()
 	cmd := <-game.ch
-	game.frameFun(game, &cmd)
+	game.frameFun(game, p, &cmd)
 	if cmd.s == "quit" {
 		game.Cleanup(p)
 		game.Over()
@@ -504,30 +521,28 @@ func pickHand(game *Game, p *Player, n int, exact bool, cond func(*Card) string)
 
 func moneylenderHack(game *Game, p *Player) []bool {
 	sel := make([]bool, len(p.hand))
-	if p.hidden {
-		p.tv <- Event{s:"go"}
+	if !game.isServer {
+		game.foo <- Event{s:"go"}
 		cmd := <-game.ch
 		if cmd.i >= 0 {
 			p.hand[cmd.i] = GetCard("Copper")
 			sel[cmd.i] = true
 		}
-	} else {
-		found := -1
-		for i, c := range p.hand {
-			if c.name == "Copper" {
-				sel[i] = true
-				found = i
-				break
-			}
+		return sel
+	}
+	found := -1
+	for i, c := range p.hand {
+		if c.name == "Copper" {
+			sel[i] = true
+			found = i
+			break
 		}
-		if game.isServer {
-			for _, other := range game.players {
-				if p == other {
-					continue
-				}
-				other.tv <- Event{s:"cmd", n:p.n, cmd:"moneylenderhack", i:found}
-			}
+	}
+	for _, other := range game.players {
+		if p == other {
+			continue
 		}
+		other.tv <- Event{s:"cmd", n:p.n, cmd:"moneylenderhack", i:found}
 	}
 	return sel
 }
@@ -584,7 +599,7 @@ func pickGain(game *Game, max int) {
 
 var errCmd Command
 
-func inHand(p *Player, cond func(*Card) bool) bool {
+func (p *Player) inHand(cond func(*Card) bool) bool {
 	for _, c := range p.hand {
 		if cond(c) {
 			return true
@@ -593,8 +608,26 @@ func inHand(p *Player, cond func(*Card) bool) bool {
 	return false
 }
 
+func (game *Game) inHand(p *Player, cond func(*Card) bool) bool {
+	if !game.isServer {
+		game.foo <- Event{s:"go"}
+		cmd := <-game.ch
+		return cmd.s == "yes"
+	}
+	res := p.inHand(cond)
+	for _, other := range game.players {
+		other.tv <- Event{s:"cmd", n:p.n, cmd:func() string {
+			if res {
+				return "yes"
+			}
+			return "done"
+		}()}
+	}
+	return res
+}
+
 func reacts(game *Game, p *Player) bool {
-	if !inHand(p, func(c *Card) bool { return c.name == "Moat" }) {
+	if !game.inHand(p, func(c *Card) bool { return c.name == "Moat" }) {
 		return false
 	}
 	sel := pickHand(game, p, 1, false, func(c *Card) string {
@@ -655,6 +688,7 @@ func (game *Game) getBool(p *Player) bool {
 }
 
 func main() {
+	log.SetFlags(log.Lshortfile)
 	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
 		KindDict[s] = &Kind{s}
 	}
@@ -784,7 +818,8 @@ Adventurer,6,Action
 				p := game.NowPlaying()
 				game.GainIfPossible(p, GetCard("Silver"))
 				game.attack(func(other *Player) {
-					if !inHand(other, isVictory) {
+					if !game.inHand(other, isVictory) {
+						// TODO: This will crash if other.hidden.
 						for _, c := range other.hand {
 							fmt.Printf("%v reveals %v\n", other.name, c.name)
 						}
@@ -868,8 +903,7 @@ Adventurer,6,Action
 					if !other.MaybeShuffle() {
 						return
 					}
-					c := other.deck[0]
-					fmt.Printf("%v reveals %v\n", other.name, c.name)
+					c := game.reveal(other)
 					if game.getBool(p) {
 						fmt.Printf("%v discards %v\n", other.name, c.name)
 						other.discard = append(other.discard, c)
@@ -888,8 +922,7 @@ Adventurer,6,Action
 						if !other.MaybeShuffle() {
 							break
 						}
-						c := other.deck[0]
-						fmt.Printf("%v reveals %v\n", other.name, c.name)
+						c := game.reveal(other)
 						other.deck = other.deck[1:]
 						v = append(v, c)
 						if isTreasure(c) {
@@ -927,7 +960,7 @@ Adventurer,6,Action
 		case "Throne Room":
 			add(func(game *Game) {
 				p := game.NowPlaying()
-				if !inHand(p, isAction) {
+				if !game.inHand(p, isAction) {
 					return
 				}
 				sel := pickHand(game, p, 1, true, func(c *Card) string {
@@ -971,7 +1004,7 @@ Adventurer,6,Action
 		case "Mine":
 			add(func(game *Game) {
 				p := game.NowPlaying()
-				if !inHand(p, isTreasure) {
+				if !game.inHand(p, isTreasure) {
 					return
 				}
 				f := func(c *Card) string {
@@ -1024,10 +1057,10 @@ Adventurer,6,Action
 	fmt.Println("= Gominion =")
 	rand.Seed(time.Now().Unix())
 	game := &Game{ch: make(chan Command), isServer: true, drawFun: serverDraw,
-		frameFun: func(game *Game, cmd *Command) {
-			for _, p := range game.players {
-				if p != game.players[game.n] {
-					p.tv <- Event{s:"cmd", cmd:cmd.s, card:cmd.c}
+		frameFun: func(game *Game, p *Player, cmd *Command) {
+			for _, other := range game.players {
+				if p != other {
+					other.tv <- Event{s:"cmd", cmd:cmd.s, card:cmd.c}
 				}
 			}
 	  },
@@ -1168,7 +1201,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 	}
 	fmt.Println();
 	//pr := presets[rand.Intn(len(presets))]
-	pr := presets[1]
+	pr := presets[2]
 	fmt.Printf("Playing \"%v\"\n", pr.name)
 	for i, c := range pr.cards {
 		c.supply = 10
@@ -1180,7 +1213,8 @@ setSupply("Province", 1)
 			p.deck.Add("Estate")
 		}
 		for i := 0; i < 7; i++ {
-			p.deck.Add("Copper")
+			//p.deck.Add("Copper")
+			p.deck.Add("Gold")
 		}
 		p.deck.shuffle()
 		p.hand, p.deck = p.deck[:5], p.deck[5:]
@@ -1260,14 +1294,14 @@ func (consoleGamer) start(game *Game, p *Player) {
 		switch ev.s {
 		case "cmd":
 			if ev.cmd == "play" {
-				fmt.Printf("%v plays %v\n", game.players[ev.n].name, ev.card.name)
+				//fmt.Printf("%v plays %v\n", game.players[ev.n].name, ev.card.name)
 			}
 		case "phase":
 			if ev.n == p.n && ev.phase == phAction {
 				p.dumpHand()
 			}
 		case "play":
-			fmt.Printf("%v plays %v\n", game.players[ev.n].name, ev.card.name)
+			//fmt.Printf("%v plays %v\n", game.players[ev.n].name, ev.card.name)
 		case "gain":
 			fmt.Printf("%v gains %v\n", game.players[ev.n].name, ev.card.name)
 		case "buy":
@@ -1283,9 +1317,10 @@ func (consoleGamer) start(game *Game, p *Player) {
 			}
 		case "cleanup":
 			fmt.Printf("%v cleans up\n", game.players[ev.n].name)
-		case "go": game.ch <- func() Command {
+		case "go":
+game.ch <- func() Command {
 			// Automatically advance to next phase when it's obvious.
-			if ev.phase == phAction && (p.a == 0 || !inHand(p, isAction)) {
+			if ev.phase == phAction && (p.a == 0 || !p.inHand(isAction)) {
 				return Command{s:"next"}
 			}
 			if ev.phase == phBuy && p.b == 0 {
@@ -1296,7 +1331,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 			}
 			if ev.phase != phBuy {
 				buyMode = false
-			} else if !inHand(p, isTreasure) {
+			} else if !p.inHand(isTreasure) {
 				buyMode = true
 			}
 
@@ -1355,7 +1390,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 							msg = "wrong phase"
 							break
 						}
-						if inHand(p, isTreasure) {
+						if p.inHand(isTreasure) {
 							buyMode = !buyMode
 						}
 					case '.':
@@ -1630,14 +1665,14 @@ func client() {
 			other.hand = append(other.hand, nil)
 		}
 	}
-	game.cast(ev)
 	return 0
-}, frameFun: func(game *Game, cmd *Command) {
-	if p != game.NowPlaying() {
+}, frameFun: func(game *Game, other *Player, cmd *Command) {
+	if p != other {
 		return
 	}
 	v = next()
 	if v[0] != "go" {
+		log.Print(v)
 		log.Fatalf("want 'go', got %q", v[0])
 	}
 	u := "http://:8080/cmd?s=" + cmd.s
@@ -1646,10 +1681,10 @@ func client() {
 	}
 	send(u)
 }}
-serverTV := make(chan Event)
+game.foo = make(chan Event)
 go func() {
 	for {
-		ev := <-serverTV
+		ev := <-game.foo
 		if ev.s == "go" {
 			v = next()
 			if v[0] != "cmd" {
@@ -1681,7 +1716,7 @@ go func() {
 			if line == p.name {
 				game.players = append(game.players, p)
 			} else {
-				other := &Player{name:line, tv:serverTV, hidden:true}
+				other := &Player{name:line, tv:game.foo, hidden:true}
 				other.deck = make([]*Card, 5, 5)
 				other.hand = make([]*Card, 5, 5)
 				game.players = append(game.players, other)
