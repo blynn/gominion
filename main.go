@@ -95,6 +95,7 @@ type Game struct {
 	trash Pile
 	drawFun func (game *Game, p *Player, n int) int
 	frameFun func (game *Game, cmd *Command)
+	isServer bool
 }
 
 const (
@@ -118,7 +119,14 @@ func (game *Game) dump() {
 	for _, p := range game.players {
 		fmt.Printf("%v/%v/%v/%v", p.name, len(p.deck), len(p.hand), len(p.discard))
 		if len(p.discard) > 0 {
+if c := p.discard[len(p.discard)-1]; c == nil {
+	fmt.Printf(":TODO")
+} else {
+	fmt.Printf(":%v", p.discard[len(p.discard)-1].name)
+}
+			/*
 			fmt.Printf(":%v", p.discard[len(p.discard)-1].name)
+			*/
 		}
 		fmt.Println("")
 	}
@@ -174,6 +182,11 @@ func (game *Game) MultiPlay(n int, c *Card, m int) {
 		if k < 0 {
 			panic("unplayable")
 		}
+	} else {
+		if len(p.hand) == 0 {
+			panic("cheating?")
+		}
+		p.hand = p.hand[1:]
 	}
 	p.played = append(p.played, c)
 	if isAction(c) {
@@ -248,6 +261,7 @@ type Frame struct {
 type Command struct {
 	s string
 	c *Card
+	i int
 }
 
 type PlayFun interface {
@@ -421,7 +435,7 @@ func (game *Game) pick(list []*Card, p *Player, n int, exact bool, cond func(*Ca
 	sel := make([]bool, len(list))
 	game.SetParse(func(b byte) (Command, string) {
 		if b == '/' {
-			return Command{"done", nil}, ""
+			return Command{s:"done"}, ""
 		}
 		choice := game.keyToCard(b)
 		if choice == nil {
@@ -445,7 +459,7 @@ func (game *Game) pick(list []*Card, p *Player, n int, exact bool, cond func(*Ca
 				return errCmd, msg
 			}
 		}
-		return Command{"pick", choice}, ""
+		return Command{s:"pick", c:choice}, ""
 	})
 	for stop := false; !stop; {
 		cmd := game.getCommand(p)
@@ -453,7 +467,15 @@ func (game *Game) pick(list []*Card, p *Player, n int, exact bool, cond func(*Ca
 			case "pick":
 				found := false
 				for i, c := range list {
-					if !sel[i] && c == cmd.c {
+					if sel[i] {
+						continue
+					}
+					// nil represents unknown cards.
+					if c == nil {
+						list[i] = cmd.c
+						c = cmd.c
+					}
+					if c == cmd.c {
 						sel[i] = true
 						n--
 						found = true
@@ -478,6 +500,36 @@ func (game *Game) pick(list []*Card, p *Player, n int, exact bool, cond func(*Ca
 
 func pickHand(game *Game, p *Player, n int, exact bool, cond func(*Card) string) []bool {
 	return game.pick(p.hand, p, n, exact, cond)
+}
+
+func moneylenderHack(game *Game, p *Player) []bool {
+	sel := make([]bool, len(p.hand))
+	if p.hidden {
+		p.tv <- Event{s:"go"}
+		cmd := <-game.ch
+		if cmd.i >= 0 {
+			p.hand[cmd.i] = GetCard("Copper")
+			sel[cmd.i] = true
+		}
+	} else {
+		found := -1
+		for i, c := range p.hand {
+			if c.name == "Copper" {
+				sel[i] = true
+				found = i
+				break
+			}
+		}
+		if game.isServer {
+			for _, other := range game.players {
+				if p == other {
+					continue
+				}
+				other.tv <- Event{s:"cmd", n:p.n, cmd:"moneylenderhack", i:found}
+			}
+		}
+	}
+	return sel
 }
 
 func (game *Game) Gain(p *Player, c *Card) {
@@ -512,7 +564,7 @@ func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 				return errCmd, msg
 			}
 		}
-		return Command{"pick", c}, ""
+		return Command{s:"pick", c:c}, ""
 	})
 	p := game.NowPlaying()
 	cmd := game.getCommand(p)
@@ -586,9 +638,9 @@ func (game *Game) getBool(p *Player) bool {
 	game.SetParse(func(b byte) (Command, string) {
 		switch b {
 			case '\\':
-				return Command{"yes", nil}, ""
+				return Command{s:"yes"}, ""
 			case '/':
-				return Command{"done", nil}, ""
+				return Command{s:"done"}, ""
 		}
 		return errCmd, "\\ for yes, / for no"
 	})
@@ -784,12 +836,9 @@ Adventurer,6,Action
 		case "Moneylender":
 			add(func(game *Game) {
 				p := game.NowPlaying()
-				isCopper := func(c *Card) bool { return c.name == "Copper" }
-				if !inHand(p, isCopper) {
-					return
-				}
-				for i, c := range p.hand {
-					if isCopper(c) {
+				sel := moneylenderHack(game, p)
+				for i := range p.hand {
+					if sel[i] {
 						game.TrashHand(p, i)
 						p.c += 3
 						return
@@ -974,7 +1023,7 @@ Adventurer,6,Action
 
 	fmt.Println("= Gominion =")
 	rand.Seed(time.Now().Unix())
-	game := &Game{ch: make(chan Command), drawFun: serverDraw,
+	game := &Game{ch: make(chan Command), isServer: true, drawFun: serverDraw,
 		frameFun: func(game *Game, cmd *Command) {
 			for _, p := range game.players {
 				if p != game.players[game.n] {
@@ -1015,6 +1064,14 @@ Adventurer,6,Action
 				fmt.Fprintf(w, "error: no such card")
 				return
 			}
+		}
+		if s := r.FormValue("i"); s != "" {
+			i, err := strconv.Atoi(s)
+			if err != nil {
+				fmt.Fprintf(w, "error: malformed int")
+				return
+			}
+			cmd.i = i
 		}
 		ng.in <- cmd
 		fmt.Fprintf(w, <-ng.out)
@@ -1229,13 +1286,13 @@ func (consoleGamer) start(game *Game, p *Player) {
 		case "go": game.ch <- func() Command {
 			// Automatically advance to next phase when it's obvious.
 			if ev.phase == phAction && (p.a == 0 || !inHand(p, isAction)) {
-				return Command{"next", nil}
+				return Command{s:"next"}
 			}
 			if ev.phase == phBuy && p.b == 0 {
-				return Command{"next", nil}
+				return Command{s:"next"}
 			}
 			if ev.phase == phCleanup {
-				return Command{"next", nil}
+				return Command{s:"next"}
 			}
 			if ev.phase != phBuy {
 				buyMode = false
@@ -1248,7 +1305,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 					if ev.phase == phBuy {
 						for k := len(p.hand)-1; k >= 0; k-- {
 							if isTreasure(p.hand[k]) {
-								return Command{"play", p.hand[k]}
+								return Command{s:"play", c:p.hand[k]}
 							}
 						}
 					}
@@ -1264,7 +1321,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 					s, err := reader.ReadString('\n')
 					if err == io.EOF {
 						fmt.Printf("\nQuitting game...\n")
-						return Command{"quit", nil}
+						return Command{s:"quit"}
 					}
 					if err != nil {
 						panic(err)
@@ -1302,7 +1359,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 							buyMode = !buyMode
 						}
 					case '.':
-						return Command{"next", nil}
+						return Command{s:"next"}
 					case '*':
 						if ev.phase != phBuy {
 							msg = "wrong phase"
@@ -1319,7 +1376,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 							if msg = CanBuy(game, c); msg != "" {
 								break
 							}
-							return Command{"buy", c}
+							return Command{s:"buy", c:c}
 						}
 						if msg = CanPlay(game, c); msg != "" {
 							break
@@ -1328,7 +1385,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 						var k int
 						for k = len(p.hand)-1; k >= 0; k-- {
 							if p.hand[k] == c {
-								return Command{"play", c}
+								return Command{s:"play", c:c}
 							}
 						}
 						msg = "none in hand"
@@ -1369,7 +1426,7 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 			case "Bureaucrat":
 				for _, c := range p.hand {
 					if isVictory(c) {
-						game.ch <- Command{"pick", c}
+						game.ch <- Command{s:"pick", c:c}
 						ev = <-p.tv
 						break
 					}
@@ -1378,7 +1435,7 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 			case "Militia":
 				// TODO: Better discard strategy.
 				for i := 0; i < 3; i++ {
-					game.ch <- Command{"pick", p.hand[i]}
+					game.ch <- Command{s:"pick", c:p.hand[i]}
 					ev = <-p.tv
 				}
 			default:
@@ -1389,28 +1446,28 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 		game.ch<- func() Command {
 			switch ev.phase {
 			case phAction:
-				return Command{"next", nil}
+				return Command{s:"next"}
 			case phCleanup:
-				return Command{"next", nil}
+				return Command{s:"next"}
 			}
 			if ev.phase != phBuy {
 				panic("unknown event: " + ev.s)
 			}
 			if p.b == 0 {
-				return Command{"next", nil}
+				return Command{s:"next"}
 			}
 			for k := len(p.hand)-1; k >= 0; k-- {
 				if isTreasure(p.hand[k]) {
-					return Command{"play", p.hand[k]}
+					return Command{s:"play", c:p.hand[k]}
 				}
 			}
 			for _, s := range this.list {
 				c := GetCard(s)
 				if p.c >= c.cost {
-					return Command{"buy", c}
+					return Command{s:"buy", c:c}
 				}
 			}
-			return Command{"next", nil}
+			return Command{s:"next"}
 		}()
 	}
 }
@@ -1561,9 +1618,16 @@ func client() {
 	}
 	w := splitComma()
 	ev := Event{s:"draw", n:PanickyAtoi(w[0]), i:len(w[1])}
-	if ev.n == p.n {
-		for _, b := range []byte(w[1]) {
+	for _, b := range []byte(w[1]) {
+		other := game.players[ev.n]
+		if len(other.deck) == 0 {
+			other.deck, other.discard = other.discard, nil
+		}
+		other.deck = other.deck[1:]
+		if ev.n == p.n {
 			p.hand = append(p.hand, game.keyToCard(b))
+		} else {
+			other.hand = append(other.hand, nil)
 		}
 	}
 	game.cast(ev)
@@ -1581,7 +1645,6 @@ func client() {
 		u += "&c=" + string(cmd.c.key)
 	}
 	send(u)
-
 }}
 serverTV := make(chan Event)
 go func() {
@@ -1602,6 +1665,7 @@ go func() {
 	}
 }()
 	p = &Player{name:"Anonymous", fun:consoleGamer{}, tv:make(chan Event)}
+	p.deck = make([]*Card, 5, 5)
 	heading := ""
 	for _, line := range v[1:] {
 		if len(line) == 0 {
@@ -1617,7 +1681,10 @@ go func() {
 			if line == p.name {
 				game.players = append(game.players, p)
 			} else {
-				game.players = append(game.players, &Player{name:line, tv:serverTV, hidden:true})
+				other := &Player{name:line, tv:serverTV, hidden:true}
+				other.deck = make([]*Card, 5, 5)
+				other.hand = make([]*Card, 5, 5)
+				game.players = append(game.players, other)
 			}
 		case "Hand":
 			for _, c := range []byte(line) {
