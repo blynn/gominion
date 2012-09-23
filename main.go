@@ -103,7 +103,6 @@ const (
 	phAction = iota
 	phBuy
 	phCleanup
-	phCard
 )
 
 func (game *Game) dump() {
@@ -207,12 +206,10 @@ func (game *Game) MultiPlay(n int, c *Card, m int) {
 }
 
 func (game *Game) Play(n int, c *Card) {
-	//game.cast(Event{s:"play", card:c, n:n})
 	game.MultiPlay(n, c, 1)
 }
 
 func (game *Game) Spend(n int, c *Card) {
-	//game.cast(Event{s:"buy", card:c, n:game.n})
 	p := game.players[n]
 	p.c -= c.cost
 	p.b--
@@ -282,9 +279,7 @@ type Player struct {
 type Event struct {
 	s string
 	card *Card
-	parse func(b byte) (Command, string)
 	n int
-	phase int
 	i int
 	cmd string
 }
@@ -359,7 +354,6 @@ func (game *Game) revealHand(p *Player) {
 }
 
 func (game *Game) Cleanup(p *Player) {
-	//game.cast(Event{s:"cleanup", n:game.n})
 	p.discard, p.played = append(p.discard, p.played...), nil
 	p.discard, p.hand = append(p.discard, p.hand...), nil
 }
@@ -447,13 +441,7 @@ func (game *Game) Over() {
 }
 
 func (game *Game) getCommand(p *Player) Command {
-	p.tv <- func() Event {
-		frame := game.StackTop()
-		if frame != nil {
-			return Event{s:"go", phase:phCard, card:frame.card, parse:frame.Parse}
-		}
-		return Event{s:"go", phase:game.phase}
-	}()
+	p.tv <- Event{s:"go"}
 	cmd := <-game.ch
 	game.frameFun(game, p, &cmd)
 	if cmd.s == "quit" {
@@ -561,10 +549,6 @@ func moneylenderHack(game *Game, p *Player) *Card {
 	}
 	game.cast(Event{s:"cmd", n:p.n, cmd:"moneylenderhack", card:c})
 	return c
-	/*
-	game.cast(Event{s:"cmd", n:p.n, cmd:"moneylenderhack", i:found})
-	return found
-	*/
 }
 
 func (game *Game) Gain(p *Player, c *Card) {
@@ -1288,7 +1272,7 @@ fmt.Printf("%v buys %v for $%v\n", game.players[game.n].name, choice.name, choic
 					if err := CanPlay(game, cmd.c); err != "" {
 						panic(err)
 					}
-fmt.Printf("[%v plays %v]\n", game.players[game.n].name, cmd.c.name)
+fmt.Printf("%v plays %v\n", game.players[game.n].name, cmd.c.name)
 					game.Play(game.n, cmd.c)
 				case "next":
 					game.phase++
@@ -1337,17 +1321,9 @@ func (consoleGamer) start(game *Game, p *Player) {
 			}
 			*/
 		case "phase":
-			if ev.n == p.n && ev.phase == phAction {
+			if ev.n == p.n && game.phase == phAction {
 				p.dumpHand()
 			}
-			/*
-		case "play":
-			fmt.Printf("%v plays %v\n", game.players[ev.n].name, ev.card.name)
-			*/
-		case "gain":
-			fmt.Printf("%v gains %v\n", game.players[ev.n].name, ev.card.name)
-		case "buy":
-			fmt.Printf("%v buys %v for $%v\n", game.players[ev.n].name, ev.card.name, ev.card.cost)
 		case "draw":
 			if p.n != ev.n {
 				fmt.Printf("%v draws %v cards\n", game.players[ev.n].name, ev.i)
@@ -1357,29 +1333,30 @@ func (consoleGamer) start(game *Game, p *Player) {
 					fmt.Printf("%v draws [%c] %v\n", p.name, c.key, c.name)
 				}
 			}
-		case "cleanup":
-			fmt.Printf("%v cleans up\n", game.players[ev.n].name)
 		case "go":
 game.ch <- func() Command {
 			// Automatically advance to next phase when it's obvious.
-			if ev.phase == phAction && (p.a == 0 || !p.inHand(isAction)) {
-				return Command{s:"next"}
-			}
-			if ev.phase == phBuy && p.b == 0 {
-				return Command{s:"next"}
-			}
-			if ev.phase == phCleanup {
-				return Command{s:"next"}
-			}
-			if ev.phase != phBuy {
-				buyMode = false
-			} else if !p.inHand(isTreasure) {
-				buyMode = true
+			frame := game.StackTop()
+			if frame == nil {
+				if game.phase == phAction && (p.a == 0 || !p.inHand(isAction)) {
+					return Command{s:"next"}
+				}
+				if game.phase == phBuy && p.b == 0 {
+					return Command{s:"next"}
+				}
+				if game.phase == phCleanup {
+					return Command{s:"next"}
+				}
+				if game.phase != phBuy {
+					buyMode = false
+				} else if !p.inHand(isTreasure) {
+					buyMode = true
+				}
 			}
 
 			for {
 				if wildCard {
-					if ev.phase == phBuy {
+					if game.phase == phBuy {
 						for k := len(p.hand)-1; k >= 0; k-- {
 							if isTreasure(p.hand[k]) {
 								return Command{s:"play", c:p.hand[k]}
@@ -1391,8 +1368,8 @@ game.ch <- func() Command {
 				i++
 				for i >= len(prog) {
 					fmt.Printf("a:%v b:%v c:%v %v", p.a, p.b, p.c, p.name)
-					if ev.phase == phCard {
-						fmt.Printf(" %v", ev.card.name)
+					if frame != nil {
+						fmt.Printf(" %v", frame.card.name)
 					}
 					fmt.Printf("> ")
 					s, err := reader.ReadString('\n')
@@ -1419,16 +1396,16 @@ game.ch <- func() Command {
 					continue
 				}
 				msg := ""
-				if ev.phase == phCard {
+				if frame != nil {
 					var cmd Command
-					if cmd, msg = ev.parse(prog[i]); msg == "" {
+					if cmd, msg = frame.Parse(prog[i]); msg == "" {
 						return cmd
 					}
 				} else {
 					switch prog[i] {
 					case '+': fallthrough
 					case ';':
-						if ev.phase != phBuy {
+						if game.phase != phBuy {
 							msg = "wrong phase"
 							break
 						}
@@ -1438,7 +1415,7 @@ game.ch <- func() Command {
 					case '.':
 						return Command{s:"next"}
 					case '*':
-						if ev.phase != phBuy {
+						if game.phase != phBuy {
 							msg = "wrong phase"
 							break
 						}
@@ -1498,8 +1475,8 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 		if ev.s != "go"{
 			continue
 		}
-		if ev.phase == phCard {
-			switch ev.card.name {
+		if frame := game.StackTop(); frame != nil {
+			switch frame.card.name {
 			case "Bureaucrat":
 				for _, c := range p.hand {
 					if isVictory(c) {
@@ -1516,19 +1493,19 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 					ev = <-p.tv
 				}
 			default:
-				panic("AI unimplemented: " + ev.card.name)
+				panic("AI unimplemented: " + frame.card.name)
 			}
 			continue
 		}
 		game.ch<- func() Command {
-			switch ev.phase {
+			switch game.phase {
 			case phAction:
 				return Command{s:"next"}
 			case phCleanup:
 				return Command{s:"next"}
 			}
-			if ev.phase != phBuy {
-				panic("unknown event: " + ev.s)
+			if game.phase != phBuy {
+				panic("unreachable")
 			}
 			if p.b == 0 {
 				return Command{s:"next"}
@@ -1584,10 +1561,6 @@ func (this netGamer) start(game *Game, p *Player) {
 	for {
 		select {
 		case ev := <-p.tv:
-if ev.s != "cmd" && ev.s != "go" && ev.s != "new" && ev.s != "draw" && ev.n == p.n {
-	log.Printf("redundant")
-	continue
-}
 			q = append(q, ev)
 		case cmd := <-this.in:
 			switch cmd.s {
@@ -1611,9 +1584,7 @@ if ev.s != "cmd" && ev.s != "go" && ev.s != "new" && ev.s != "draw" && ev.n == p
 					if ev.card != nil {
 						s = string(ev.card.key)
 					}
-					this.out <- fmt.Sprintf("%v\n%v,%v\n", ev.s, ev.phase, s)
-				case "phase":
-					this.out <- fmt.Sprintf("%v\n%v,%v\n", ev.s, ev.n, ev.phase)
+					this.out <- fmt.Sprintf("%v\n%v\n", ev.s, s)
 				case "draw":
 					if p.n != ev.n {
 						s := ""
@@ -1742,6 +1713,8 @@ go func() {
 				cmd.c = game.keyToCard(w[1][0])
 			}
 			game.ch <- cmd
+		} else {
+		  log.Fatal(ev.s)
 		}
 	}
 }()
