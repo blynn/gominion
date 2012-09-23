@@ -302,23 +302,26 @@ func (p *Player) MaybeShuffle() bool {
 	return true
 }
 
-func drawOne(game *Game, p *Player) bool {
+func drawOne(game *Game, p *Player) *Card {
 	if !p.MaybeShuffle() {
-		return false
+		return nil
 	}
 	c := p.deck[0]
 	p.deck, p.hand = p.deck[1:], append(p.hand, c)
-	return true
+	return c
 }
 
 func serverDraw(game *Game, p *Player, n int) int {
+	s := ""
 	i := 0
 	for ; i < n; i++ {
-		if !drawOne(game, p) {
+		if c := drawOne(game, p); c == nil {
 			break
+		} else {
+			s += string(c.key)
 		}
 	}
-	game.cast(Event{s:"draw", n:p.n, i:i})
+	game.cast(Event{s:"draw", n:p.n, i:i, cmd:s})
 	return i
 }
 
@@ -461,7 +464,14 @@ func (game *Game) getCommand(p *Player) Command {
 	return cmd
 }
 
-func (game *Game) pick(list []*Card, p *Player, n int, exact bool, cond func(*Card) string) []bool {
+type pickOpts struct {
+	n int
+	exact bool
+	cond func(*Card) string
+}
+
+func (game *Game) pick(list []*Card, p *Player, o pickOpts) []bool {
+	n := o.n
 	sel := make([]bool, len(list))
 	game.SetParse(func(b byte) (Command, string) {
 		if b == '/' {
@@ -484,8 +494,8 @@ func (game *Game) pick(list []*Card, p *Player, n int, exact bool, cond func(*Ca
 		}() {
 			return errCmd, "invalid choice"
 		}
-		if cond != nil {
-			if msg := cond(choice); msg != "" {
+		if o.cond != nil {
+			if msg := o.cond(choice); msg != "" {
 				return errCmd, msg
 			}
 		}
@@ -517,7 +527,7 @@ func (game *Game) pick(list []*Card, p *Player, n int, exact bool, cond func(*Ca
 				}
 				stop = n == 0
 			case "done":
-				if exact && n > 0 {
+				if o.exact && n > 0 {
 					panic("must pick more")
 				}
 				stop = true
@@ -529,35 +539,32 @@ func (game *Game) pick(list []*Card, p *Player, n int, exact bool, cond func(*Ca
 }
 
 func pickHand(game *Game, p *Player, n int, exact bool, cond func(*Card) string) []bool {
-	return game.pick(p.hand, p, n, exact, cond)
+	return game.pick(p.hand, p, pickOpts{n:n, exact:exact, cond:cond})
 }
 
-func moneylenderHack(game *Game, p *Player) []bool {
-	sel := make([]bool, len(p.hand))
+func moneylenderHack(game *Game, p *Player) *Card {
 	if !game.isServer {
 		game.foo <- Event{s:"go"}
 		cmd := <-game.ch
-		if cmd.i >= 0 {
-			p.hand[cmd.i] = GetCard("Copper")
-			sel[cmd.i] = true
-		}
-		return sel
+		return cmd.c
 	}
 	found := -1
 	for i, c := range p.hand {
 		if c.name == "Copper" {
-			sel[i] = true
 			found = i
 			break
 		}
 	}
-	for _, other := range game.players {
-		if p == other {
-			continue
-		}
-		other.tv <- Event{s:"cmd", n:p.n, cmd:"moneylenderhack", i:found}
+	var c *Card
+	if found >= 0 {
+		c = GetCard("Copper")
 	}
-	return sel
+	game.cast(Event{s:"cmd", n:p.n, cmd:"moneylenderhack", card:c})
+	return c
+	/*
+	game.cast(Event{s:"cmd", n:p.n, cmd:"moneylenderhack", i:found})
+	return found
+	*/
 }
 
 func (game *Game) Gain(p *Player, c *Card) {
@@ -871,7 +878,12 @@ Adventurer,6,Action
 					sel := pickHand(game, other, 3, true, nil)
 					for i := len(other.hand)-1; i >= 0; i-- {
 						if !sel[i] {
-							fmt.Printf("%v discards %v\n", other.name, other.hand[i].name)
+if other.hand[i] == nil {
+	fmt.Printf("%v discards TODO\n", other.name)
+} else {
+	fmt.Printf("%v discards %v\n", other.name, other.hand[i].name)
+}
+							//fmt.Printf("%v discards %v\n", other.name, other.hand[i].name)
 							other.discard = append(other.discard, other.hand[i])
 							other.hand = append(other.hand[:i], other.hand[i+1:]...)
 						}
@@ -881,12 +893,15 @@ Adventurer,6,Action
 		case "Moneylender":
 			add(func(game *Game) {
 				p := game.NowPlaying()
-				sel := moneylenderHack(game, p)
-				for i := range p.hand {
-					if sel[i] {
-						game.TrashHand(p, i)
-						p.c += 3
-						return
+				c := moneylenderHack(game, p)
+				if c != nil {
+					for i, x := range p.hand {
+						if x == nil || x == c{
+							p.hand[i] = c
+							game.TrashHand(p, i)
+							p.c += 3
+							break
+						}
 					}
 				}
 			})
@@ -938,12 +953,12 @@ Adventurer,6,Action
 						}
 					}
 					if found > 1 {
-						sel := game.pick(v, p, 1, true, func(c *Card) string {
+						sel := game.pick(v, p, pickOpts{n:1, exact:true, cond:func(c *Card) string {
 							if !isTreasure(c) {
 								return "must pick Treasure"
 							}
 							return ""
-						})
+						}})
 						for i, b := range sel {
 							if b {
 								trashi = i
@@ -992,15 +1007,31 @@ Adventurer,6,Action
 			add(func(game *Game) {
 				p := game.NowPlaying()
 				var v []*Card
-				for {
-					if len(p.hand) == 7 {
-						break
+				for len(p.hand) < 7 && game.draw(p, 1) == 1 {
+					mustAsk := false
+					if game.isServer {
+						c := p.hand[len(p.hand)-1]
+						cmd := "done"
+						if isAction(c) {
+							mustAsk = true
+							cmd = "yes"
+						}
+						game.cast(Event{s:"cmd", cmd:cmd})
+					} else {
+						game.foo <- Event{s:"go"}
+						cmd := <-game.ch
+						mustAsk = cmd.s == "yes"
 					}
-					if game.draw(p, 1) == 0 {
-						break
-					}
-					c := p.hand[len(p.hand)-1]
-					if isAction(c) && game.getBool(p) {
+					if mustAsk && game.getBool(p) {
+						var c *Card
+						if game.isServer {
+							c = p.hand[len(p.hand)-1]
+							game.cast(Event{s:"cmd", card:c})
+						} else {
+							game.foo <- Event{s:"go"}
+							cmd := <-game.ch
+							c = cmd.c
+						}
 						fmt.Printf("%v sets aside %v\n", p.name, c.name)
 						p.hand = p.hand[:len(p.hand)-1]
 						v = append(v, c)
@@ -1058,12 +1089,12 @@ Adventurer,6,Action
 
 	flag.Parse()
 	if flag.NArg() > 0 {
-		client()
+		client(flag.Arg(0))
 		return
 	}
 
-	fmt.Println("= Gominion =")
 	rand.Seed(time.Now().Unix())
+	fmt.Println("= Gominion =")
 	game := &Game{ch: make(chan Command), isServer: true, drawFun: serverDraw,
 		frameFun: func(game *Game, p *Player, cmd *Command) {
 			for _, other := range game.players {
@@ -1106,6 +1137,7 @@ Adventurer,6,Action
 				return
 			}
 		}
+		/*
 		if s := r.FormValue("i"); s != "" {
 			i, err := strconv.Atoi(s)
 			if err != nil {
@@ -1114,6 +1146,7 @@ Adventurer,6,Action
 			}
 			cmd.i = i
 		}
+		*/
 		ng.in <- cmd
 		fmt.Fprintf(w, <-ng.out)
 	})
@@ -1208,8 +1241,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		fmt.Printf("  %v", pr.name)
 	}
 	fmt.Println();
-	//pr := presets[rand.Intn(len(presets))]
-	pr := presets[1]
+	pr := presets[rand.Intn(len(presets))]
 	fmt.Printf("Playing \"%v\"\n", pr.name)
 	for i, c := range pr.cards {
 		c.supply = 10
@@ -1221,8 +1253,7 @@ setSupply("Province", 1)
 			p.deck.Add("Estate")
 		}
 		for i := 0; i < 7; i++ {
-			//p.deck.Add("Copper")
-			p.deck.Add("Gold")
+			p.deck.Add("Copper")
 		}
 		p.deck.shuffle()
 		p.hand, p.deck = p.deck[:5], p.deck[5:]
@@ -1301,15 +1332,19 @@ func (consoleGamer) start(game *Game, p *Player) {
 		ev := <-p.tv
 		switch ev.s {
 		case "cmd":
+			/*
 			if ev.cmd == "play" {
-				//fmt.Printf("%v plays %v\n", game.players[ev.n].name, ev.card.name)
+				fmt.Printf("%v plays %v\n", game.players[ev.n].name, ev.card.name)
 			}
+			*/
 		case "phase":
 			if ev.n == p.n && ev.phase == phAction {
 				p.dumpHand()
 			}
+			/*
 		case "play":
-			//fmt.Printf("%v plays %v\n", game.players[ev.n].name, ev.card.name)
+			fmt.Printf("%v plays %v\n", game.players[ev.n].name, ev.card.name)
+			*/
 		case "gain":
 			fmt.Printf("%v gains %v\n", game.players[ev.n].name, ev.card.name)
 		case "buy":
@@ -1581,21 +1616,21 @@ if ev.s != "cmd" && ev.s != "go" && ev.s != "new" && ev.s != "draw" && ev.n == p
 				case "phase":
 					this.out <- fmt.Sprintf("%v\n%v,%v\n", ev.s, ev.n, ev.phase)
 				case "draw":
-					s := ""
-					for i := ev.i; i > 0; i-- {
-						if p.n == ev.n {
-							s += string(p.hand[len(p.hand) - i].key)
-						} else {
+					if p.n != ev.n {
+						s := ""
+						for i := 0; i < len(ev.cmd); i++ {
 							s += "?"
 						}
+						this.out <- fmt.Sprintf("%v\n%v,%v\n", ev.s, ev.n, s)
+					} else {
+						this.out <- fmt.Sprintf("%v\n%v,%v\n", ev.s, ev.n, ev.cmd)
 					}
-					this.out <- fmt.Sprintf("%v\n%v,%v\n", ev.s, ev.n, s)
 				case "cmd":
 					s := ""
 					if ev.card != nil {
 						s = string(ev.card.key)
 					}
-					this.out <- fmt.Sprintf("%v\n%v,%v\n", ev.s, ev.cmd, s)
+					this.out <- fmt.Sprintf("%v\n%v,%v,%v\n", ev.s, ev.cmd, s)
 				default:
 					this.out <- "BUG"
 				}
@@ -1612,7 +1647,8 @@ if ev.s != "cmd" && ev.s != "go" && ev.s != "new" && ev.s != "draw" && ev.n == p
 	}
 }
 
-func client() {
+func client(host string) {
+	host = "http://"+host+"/"
 	send := func(u string) string {
 		resp, err := http.Get(u)
 		if err != nil {
@@ -1627,7 +1663,7 @@ func client() {
 	}
 	next := func() []string {
 		for {
-			body := send("http://:8080/poll")
+			body := send(host + "poll")
 			if body == "wait" {
 				time.Sleep(200 * time.Millisecond)
 				continue
@@ -1654,26 +1690,29 @@ func client() {
 	var p *Player
 	game := &Game{
 		ch: make(chan Command),
-		drawFun: func(game *Game, p *Player, n int) int {
+		drawFun: func(game *Game, other *Player, n int) int {
 	v = next()
 	if v[0] != "draw" {
 		log.Fatalf("want 'draw', got %q", v[0])
 	}
 	w := splitComma()
-	ev := Event{s:"draw", n:PanickyAtoi(w[0]), i:len(w[1])}
 	for _, b := range []byte(w[1]) {
-		other := game.players[ev.n]
 		if len(other.deck) == 0 {
 			other.deck, other.discard = other.discard, nil
 		}
 		other.deck = other.deck[1:]
-		if ev.n == p.n {
+		if p == other {
+			c := game.keyToCard(b)
 			p.hand = append(p.hand, game.keyToCard(b))
+			fmt.Printf("%v draws [%c] %v\n", p.name, b, c.name)
 		} else {
 			other.hand = append(other.hand, nil)
 		}
 	}
-	return 0
+	if other != p {
+		fmt.Printf("%v draws %v cards\n", other.name, len(w[1]))
+	}
+	return len(w[1])
 }, frameFun: func(game *Game, other *Player, cmd *Command) {
 	if p != other {
 		return
@@ -1683,7 +1722,7 @@ func client() {
 		log.Print(v)
 		log.Fatalf("want 'go', got %q", v[0])
 	}
-	u := "http://:8080/cmd?s=" + cmd.s
+	u := host + "cmd?s=" + cmd.s
 	if cmd.c != nil {
 		u += "&c=" + string(cmd.c.key)
 	}
