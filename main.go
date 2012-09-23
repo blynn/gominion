@@ -1247,7 +1247,6 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		c.supply = 10
 		layout(c.name, keys[i])
 	}
-setSupply("Province", 1)
 	for i, p := range players {
 		for i := 0; i < 3; i++ {
 			p.deck.Add("Estate")
