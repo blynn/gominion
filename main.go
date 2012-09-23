@@ -97,6 +97,7 @@ type Game struct {
 	sendCmd func (game *Game, p *Player, cmd *Command)
 	isServer bool
 	fetch func() Command
+	GetDiscard func (game *Game, p *Player) string
 }
 
 const (
@@ -119,16 +120,9 @@ func (game *Game) dump() {
 	for _, p := range game.players {
 		fmt.Printf("%v/%v/%v/%v", p.name, len(p.deck), len(p.hand), len(p.discard))
 		if len(p.discard) > 0 {
-if c := p.discard[len(p.discard)-1]; c == nil {
-	fmt.Printf(":TODO")
-} else {
-	fmt.Printf(":%v", p.discard[len(p.discard)-1].name)
-}
-			/*
-			fmt.Printf(":%v", p.discard[len(p.discard)-1].name)
-			*/
+			fmt.Printf(":%v", game.GetDiscard(game, p))
 		}
-		fmt.Println("")
+		fmt.Println()
 	}
 }
 
@@ -373,8 +367,8 @@ func getKind(s string) *Kind {
 
 func (game *Game) CanPlay(p *Player, c *Card) string {
 	found := false
-	for i, x := range p.hand {
-		if x == nil || x == c{
+	for i := len(p.hand) - 1; i >= 0; i-- {
+		if p.hand[i] == nil || p.hand[i] == c {
 			p.hand[i] = c
 			found = true
 			break
@@ -776,12 +770,12 @@ Adventurer,6,Action
 				n := 0
 				for i := len(p.hand)-1; i >= 0; i-- {
 					if selected[i] {
-						fmt.Printf("%v discards %v\n", p.name, p.hand[i].name)
 						p.discard = append(p.discard, p.hand[i])
 						p.hand = append(p.hand[:i], p.hand[i+1:]...)
 						n++
 					}
 				}
+				game.Report(Event{s:"discard", n:p.n, i:n})
 				game.draw(p, n)
 			})
 		case "Chapel":
@@ -798,8 +792,9 @@ Adventurer,6,Action
 			add(func(game *Game) {
 				p := game.NowPlaying()
 				if game.getBool(p) {
-					fmt.Printf("%v discards deck\n", p.name)
+					i := len(p.deck)
 					p.discard, p.deck = append(p.discard, p.deck...), nil
+					game.Report(Event{s:"discarddeck", n:p.n, i:i})
 				}
 			})
 		case "Bureaucrat":
@@ -845,18 +840,15 @@ Adventurer,6,Action
 						return
 					}
 					sel := pickHand(game, other, 3, true, nil)
+					count := 0
 					for i := len(other.hand)-1; i >= 0; i-- {
 						if !sel[i] {
-if other.hand[i] == nil {
-	fmt.Printf("%v discards TODO\n", other.name)
-} else {
-	fmt.Printf("%v discards %v\n", other.name, other.hand[i].name)
-}
-							//fmt.Printf("%v discards %v\n", other.name, other.hand[i].name)
 							other.discard = append(other.discard, other.hand[i])
 							other.hand = append(other.hand[:i], other.hand[i+1:]...)
+							count++
 						}
 					}
+					game.Report(Event{s:"discard", n:other.n, i:count})
 				})
 			})
 		case "Moneylender":
@@ -910,9 +902,9 @@ if other.hand[i] == nil {
 					}
 					c := game.reveal(other)
 					if game.getBool(p) {
-						fmt.Printf("%v discards %v\n", other.name, c.name)
 						other.discard = append(other.discard, c)
 						other.deck = other.deck[1:]
+						game.Report(Event{s:"discard", n:other.n, i:1})
 					}
 				})
 			})
@@ -1087,6 +1079,10 @@ if other.hand[i] == nil {
 	}
 	players := game.players
 
+	http.HandleFunc("/discard", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, game.GetDiscard(game, game.players[PanickyAtoi(r.FormValue("n"))]))
+	})
+
 	http.HandleFunc("/poll", func(w http.ResponseWriter, r *http.Request) {
 		ng.in <- Command{s:"poll"}
 		fmt.Fprintf(w, <-ng.out)
@@ -1233,6 +1229,9 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		go p.fun.start(game, p)
 		p.tv <- Event{s:"new"}
 	}
+	game.GetDiscard = func(game *Game, p *Player) string {
+		return p.discard[len(p.discard)-1].name
+	}
 	game.mainloop()
 }
 
@@ -1303,6 +1302,12 @@ func (consoleGamer) start(game *Game, p *Player) {
 	for { select {
 	case ev := <-p.herald:
 		switch ev.s {
+		case "discard":
+			p := game.players[ev.n]
+			fmt.Printf("%v discards %v cards (%v)\n", p.name, ev.i, game.GetDiscard(game, p))
+		case "discarddeck":
+			p := game.players[ev.n]
+			fmt.Printf("%v discards deck; %v cards (%v)\n", p.name, ev.i, game.GetDiscard(game, p))
 		case "phase":
 			if game.n == p.n && game.phase == phAction {
 				p.dumpHand()
@@ -1680,6 +1685,8 @@ func client(host string) {
 	if confirm.c != cmd.c {
 		log.Fatalf("want %q, got %q", cmd.c, confirm.c)
 	}
+}, GetDiscard: func(game *Game, p *Player) string {
+	return send(fmt.Sprintf("%vdiscard?n=%v", host, p.n))
 }}
 game.fetch = func() Command {
 	v = next()
