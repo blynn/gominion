@@ -149,7 +149,7 @@ func (p *Player) dumpHand() {
 }
 
 func (game *Game) TrashHand(p *Player, i int) {
-	fmt.Printf("%v trashes %v\n", p.name, p.hand[i].name)
+	game.Report(Event{s:"trash", n:p.n, card:p.hand[i]})
 	game.trash = append(game.trash, p.hand[i])
 	p.hand = append(p.hand[:i], p.hand[i+1:]...)
 }
@@ -257,11 +257,9 @@ type Player struct {
 	name string
 	fun PlayFun
 	a, b, c int
-	deck, hand, played, discard Pile
+	manifest, deck, hand, played, discard Pile
 	n int
-	// Protocol: on receipt of a message on the trigger channel, the Player
-	// should send a Command on the game.ch channel.
-	trigger chan bool
+	trigger chan bool  // When triggered, Player sends a Command on game.ch.
 	recv chan Event    // For sending decisions to remote clients.
 	herald chan Event  // Events that may be worth printing.
 }
@@ -413,13 +411,11 @@ func (game *Game) Over() {
 	fmt.Printf("Game over\n")
 	for i, p := range game.players {
 		game.n = i  // We want NowPlaying() for some VP computations.
-		p.deck, p.discard = append(p.deck, p.discard...), nil
-		p.deck, p.hand = append(p.deck, p.hand...), nil
 		score := 0
 		m := make(map[*Card]struct {
 			count, pts int
 		})
-		for _, c := range p.deck {
+		for _, c := range p.manifest {
 			if isVictory(c) || c.HasKind(kCurse) {
 				if c.vp == nil {
 					fmt.Printf("%v unimplemented  :(\n", c.name)
@@ -441,6 +437,8 @@ func (game *Game) Over() {
 			}
 		}
 	}
+// TODO: Notify clients that game is over instead of this.
+time.Sleep(1 * time.Second)
 }
 
 func (game *Game) getCommand(p *Player) Command {
@@ -448,7 +446,6 @@ func (game *Game) getCommand(p *Player) Command {
 	cmd := <-game.ch
 	game.sendCmd(game, p, &cmd)
 	if cmd.s == "quit" {
-		game.Cleanup(p)
 		game.Over()
 		os.Exit(0)
 	}
@@ -940,7 +937,7 @@ Adventurer,6,Action
 					}
 					if found > 0 {
 						c := v[trashi]
-						fmt.Printf("%v trashes %v\n", other.name, c.name)
+						game.Report(Event{s:"trash", n:other.n, card:c})
 						v = append(v[:trashi], v[trashi+1:]...)
 						if c.supply > 0 && game.getBool(p) {
 							game.Gain(p, c)
@@ -1223,6 +1220,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		for i := 0; i < 7; i++ {
 			p.deck.Add("Copper")
 		}
+		p.manifest = append(p.manifest, p.deck...)
 		p.deck.shuffle()
 		p.hand, p.deck = p.deck[:5], p.deck[5:]
 		p.trigger = make(chan bool)
@@ -1300,22 +1298,30 @@ func (consoleGamer) start(game *Game, p *Player) {
 	buyMode := false
 	for { select {
 	case ev := <-p.herald:
+		x := game.players[ev.n]
 		switch ev.s {
 		case "discard":
-			x := game.players[ev.n]
 			fmt.Printf("%v discards %v cards (%v)\n", x.name, ev.i, game.GetDiscard(game, x))
 		case "discarddeck":
-			p := game.players[ev.n]
-			fmt.Printf("%v discards deck; %v cards (%v)\n", p.name, ev.i, game.GetDiscard(game, p))
+			fmt.Printf("%v discards deck; %v cards (%v)\n", x.name, ev.i, game.GetDiscard(game, x))
 		case "gain":
-			fmt.Printf("%v gains %v\n", game.players[ev.n].name, ev.card.name)
+			fmt.Printf("%v gains %v\n", x.name, ev.card.name)
+			x.manifest = append(x.manifest, ev.card)
+		case "trash":
+			fmt.Printf("%v trashes %v\n", x.name, ev.card.name)
+			for i, c := range x.manifest {
+				if c == ev.card {
+					x.manifest = append(x.manifest[:i], x.manifest[i+1:]...)
+					break
+				}
+			}
 		case "phase":
-			if game.n == p.n && game.phase == phAction {
+			if x == p && game.phase == phAction {
 				p.dumpHand()
 			}
 		case "draw":
-			if p.n != ev.n {
-				fmt.Printf("%v draws %v cards\n", game.players[ev.n].name, ev.i)
+			if x != p {
+				fmt.Printf("%v draws %v cards\n", x.name, ev.i)
 			} else {
 				for i := ev.i; i > 0; i-- {
 					c := p.hand[len(p.hand)-i]
