@@ -435,10 +435,12 @@ func (game *Game) Gain(p *Player, c *Card) {
 	c.supply--
 }
 
-func (game *Game) GainIfPossible(p *Player, c *Card) {
-	if c.supply > 0 {
-		game.Gain(p, c)
+func (game *Game) MaybeGain(p *Player, c *Card) bool {
+	if c.supply == 0 {
+		return false
 	}
+	game.Gain(p, c)
+	return true
 }
 
 func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
@@ -679,7 +681,11 @@ Adventurer,6,Action
 		case "Bureaucrat":
 			add(func(game *Game) {
 				p := game.NowPlaying()
-				game.GainIfPossible(p, GetCard("Silver"))
+				if game.MaybeGain(p, GetCard("Silver")) {
+					n := len(p.discard)
+					p.deck = append(p.discard[n-1:n], p.deck...)
+					p.discard = p.discard[:n-1]
+				}
 				game.attack(func(other *Player) {
 					if !inHand(other, isVictory) {
 						for _, c := range other.hand {
@@ -901,7 +907,7 @@ Adventurer,6,Action
 			})
 		case "Witch":
 			add(func(game *Game) {
-				game.attack(func(other *Player) { game.GainIfPossible(other, GetCard("Curse")) })
+				game.attack(func(other *Player) { game.MaybeGain(other, GetCard("Curse")) })
 			})
 		case "Adventurer":
 			add(func(game *Game) {
