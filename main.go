@@ -260,9 +260,9 @@ type Player struct {
 	deck, hand, played, discard Pile
 	hidden bool
 	n int
-	// Protocol: on receipt of a message on the tv channel, the Player should
-	// send a Command on the game.ch channel.
-	tv chan Event      // TODO: Make this an input channel only, etc.
+	// Protocol: on receipt of a message on the trigger channel, the Player
+	// should send a Command on the game.ch channel.
+	trigger chan bool
 	recv chan Event    // For sending decisions to remote clients.
 	herald chan Event  // Events that may be worth printing.
 }
@@ -445,7 +445,7 @@ func (game *Game) Over() {
 }
 
 func (game *Game) getCommand(p *Player) Command {
-	p.tv <- Event{s:"go"}
+	p.trigger <- true
 	cmd := <-game.ch
 	game.sendCmd(game, p, &cmd)
 	if cmd.s == "quit" {
@@ -848,7 +848,9 @@ Adventurer,6,Action
 							count++
 						}
 					}
-					game.Report(Event{s:"discard", n:other.n, i:count})
+					if count > 0 {
+						game.Report(Event{s:"discard", n:other.n, i:count})
+					}
 				})
 			})
 		case "Moneylender":
@@ -1224,10 +1226,9 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		}
 		p.deck.shuffle()
 		p.hand, p.deck = p.deck[:5], p.deck[5:]
-		p.tv = make(chan Event)
+		p.trigger = make(chan bool)
 		p.n = i;
 		go p.fun.start(game, p)
-		p.tv <- Event{s:"new"}
 	}
 	game.GetDiscard = func(game *Game, p *Player) string {
 		return p.discard[len(p.discard)-1].name
@@ -1292,7 +1293,6 @@ type consoleGamer struct {}
 
 func (consoleGamer) start(game *Game, p *Player) {
 	p.herald = make(chan Event)
-	<-p.tv
 	game.dump()
 	reader := bufio.NewReader(os.Stdin)
 	i := 0
@@ -1322,10 +1322,8 @@ func (consoleGamer) start(game *Game, p *Player) {
 				}
 			}
 		}
-	case ev := <-p.tv:
-		switch ev.s {
-		case "go":
-game.ch <- func() Command {
+	case <-p.trigger:
+		game.ch <- func() Command {
 			// Automatically advance to next phase when it's obvious.
 			frame := game.StackTop()
 			if frame == nil {
@@ -1442,9 +1440,6 @@ game.ch <- func() Command {
 			}
 			panic("unreachable")
 		}()
-		default:
-			log.Printf("ignoring event %q", ev.s)
-		}
 	}}
 }
 
@@ -1453,19 +1448,15 @@ type simpleBuyer struct {
 }
 
 func (this simpleBuyer) start(game *Game, p *Player) {
-	<-p.tv
 	for {
-		ev := <-p.tv
-		if ev.s != "go"{
-			log.Fatalf("want 'go', got %q", ev.s)
-		}
+		<-p.trigger
 		if frame := game.StackTop(); frame != nil {
 			switch frame.card.name {
 			case "Bureaucrat":
 				for _, c := range p.hand {
 					if isVictory(c) {
 						game.ch <- Command{s:"pick", c:c}
-						ev = <-p.tv
+						<-p.trigger
 						break
 					}
 				}
@@ -1474,7 +1465,7 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 				// TODO: Better discard strategy.
 				for i := 0; i < 3; i++ {
 					game.ch <- Command{s:"pick", c:p.hand[i]}
-					ev = <-p.tv
+					<-p.trigger
 				}
 			default:
 				panic("AI unimplemented: " + frame.card.name)
@@ -1542,14 +1533,20 @@ type netGamer struct {
 func (this netGamer) start(game *Game, p *Player) {
 	p.recv = make(chan Event)
 	var q []Event
+	fresh := true
 	ready := false
 	for {
 		select {
 		case ev := <-p.recv:
 			q = append(q, ev)
-		case ev := <-p.tv:
-			q = append(q, ev)
+		case <-p.trigger:
+			q = append(q, Event{s:"go"})
 		case cmd := <-this.in:
+			if fresh {
+				fresh = false
+				this.out <- "new\n= Players =\n" + encodePlayers(game.players) + "= Kingdom =\n" + encodeKingdom(game) + "= Hand =\n" + encodeHand(p)
+				break
+			}
 			switch cmd.s {
 			case "poll":
 				if len(q) == 0 {
@@ -1563,15 +1560,9 @@ func (this netGamer) start(game *Game, p *Player) {
 				ev := q[0]
 				q = q[1:]
 				switch ev.s {
-				case "new":
-					this.out <- "new\n= Players =\n" + encodePlayers(game.players) + "= Kingdom =\n" + encodeKingdom(game) + "= Hand =\n" + encodeHand(p)
 				case "go":
 					ready = true
-					s := ""
-					if ev.card != nil {
-						s = string(ev.card.key)
-					}
-					this.out <- fmt.Sprintf("%v\n%v\n", ev.s, s)
+					this.out <- "go\n"
 				case "draw":
 					if p.n != ev.n {
 						s := ""
@@ -1593,6 +1584,7 @@ func (this netGamer) start(game *Game, p *Player) {
 				}
 			default:
 				if !ready {
+					log.Fatal("breach of protocol")
 					this.out <- "error: not ready"
 				} else {
 					ready = false
@@ -1701,18 +1693,14 @@ game.fetch = func() Command {
 	return cmd
 }
 
-foo := make(chan Event)
+foo := make(chan bool)
 go func() {
 	for {
-		ev := <-foo
-		if ev.s == "go" {
-			game.ch <- game.fetch()
-		} else {
-		  log.Fatal(ev.s)
-		}
+		<-foo
+		game.ch <- game.fetch()
 	}
 }()
-	p = &Player{name:"Anonymous", fun:consoleGamer{}, tv:make(chan Event)}
+	p = &Player{name:"Anonymous", fun:consoleGamer{}, trigger:make(chan bool)}
 	p.deck = make([]*Card, 5, 5)
 	heading := ""
 	for _, line := range v[1:] {
@@ -1729,7 +1717,7 @@ go func() {
 			if line == p.name {
 				game.players = append(game.players, p)
 			} else {
-				other := &Player{name:line, tv:foo, hidden:true}
+				other := &Player{name:line, trigger:foo, hidden:true}
 				other.deck = make([]*Card, 5, 5)
 				other.hand = make([]*Card, 5, 5)
 				game.players = append(game.players, other)
@@ -1753,6 +1741,5 @@ go func() {
 		}
 	}
 	go p.fun.start(game, p)
-	p.tv <- Event{s:"new"}
 	game.mainloop()
 }
