@@ -763,16 +763,18 @@ Adventurer,6,Action
 			add(func(game *Game) {
 				p := game.NowPlaying()
 				selected := pickHand(game, p, len(p.hand), false, nil)
-				n := 0
+				count := 0
 				for i := len(p.hand)-1; i >= 0; i-- {
 					if selected[i] {
 						p.discard = append(p.discard, p.hand[i])
 						p.hand = append(p.hand[:i], p.hand[i+1:]...)
-						n++
+						count++
 					}
 				}
-				game.Report(Event{s:"discard", n:p.n, i:n})
-				game.draw(p, n)
+				if count > 0 {
+					game.Report(Event{s:"discard", n:p.n, i:count})
+				}
+				game.draw(p, count)
 			})
 		case "Chapel":
 			add(func(game *Game) {
@@ -787,7 +789,7 @@ Adventurer,6,Action
 		case "Chancellor":
 			add(func(game *Game) {
 				p := game.NowPlaying()
-				if game.getBool(p) {
+				if len(p.deck) > 0 && game.getBool(p) {
 					i := len(p.deck)
 					p.discard, p.deck = append(p.discard, p.deck...), nil
 					game.Report(Event{s:"discarddeck", n:p.n, i:i})
@@ -1228,6 +1230,10 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		go p.fun.start(game, p)
 	}
 	game.GetDiscard = func(game *Game, p *Player) string {
+		if len(p.discard) == 0 {
+		log.Print("BUG D ", p.name)
+		return "BUG!"
+		}
 		return p.discard[len(p.discard)-1].name
 	}
 	game.mainloop()
@@ -1301,6 +1307,9 @@ func (consoleGamer) start(game *Game, p *Player) {
 		x := game.players[ev.n]
 		switch ev.s {
 		case "discard":
+			if ev.i == 0 {
+				log.Print("BUG: reported 0 discards")
+			}
 			fmt.Printf("%v discards %v cards (%v)\n", x.name, ev.i, game.GetDiscard(game, x))
 		case "discarddeck":
 			fmt.Printf("%v discards deck; %v cards (%v)\n", x.name, ev.i, game.GetDiscard(game, x))
@@ -1700,10 +1709,10 @@ game.fetch = func() Command {
 	return cmd
 }
 
-foo := make(chan bool)
+sharedTrigger := make(chan bool)
 go func() {
 	for {
-		<-foo
+		<-sharedTrigger
 		game.ch <- game.fetch()
 	}
 }()
@@ -1726,7 +1735,7 @@ go func() {
 				p.n = pn
 				game.players = append(game.players, p)
 			} else {
-				other := &Player{name:line, trigger:foo}
+				other := &Player{name:line, trigger:sharedTrigger}
 				other.n = pn
 				other.deck = make([]*Card, 5, 5)
 				other.hand = make([]*Card, 5, 5)
