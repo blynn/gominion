@@ -258,7 +258,6 @@ type Player struct {
 	fun PlayFun
 	a, b, c int
 	deck, hand, played, discard Pile
-	hidden bool
 	n int
 	// Protocol: on receipt of a message on the trigger channel, the Player
 	// should send a Command on the game.ch channel.
@@ -538,7 +537,7 @@ func (game *Game) Gain(p *Player, c *Card) {
 	if c.supply == 0 {
 		panic("out of supply")
 	}
-	fmt.Printf("%v gains %v\n", p.name, c.name)
+	game.Report(Event{s:"gain", n:p.n, card:c})
 	p.discard = append(p.discard, c)
 	c.supply--
 }
@@ -1303,11 +1302,13 @@ func (consoleGamer) start(game *Game, p *Player) {
 	case ev := <-p.herald:
 		switch ev.s {
 		case "discard":
-			p := game.players[ev.n]
-			fmt.Printf("%v discards %v cards (%v)\n", p.name, ev.i, game.GetDiscard(game, p))
+			x := game.players[ev.n]
+			fmt.Printf("%v discards %v cards (%v)\n", x.name, ev.i, game.GetDiscard(game, x))
 		case "discarddeck":
 			p := game.players[ev.n]
 			fmt.Printf("%v discards deck; %v cards (%v)\n", p.name, ev.i, game.GetDiscard(game, p))
+		case "gain":
+			fmt.Printf("%v gains %v\n", game.players[ev.n].name, ev.card.name)
 		case "phase":
 			if game.n == p.n && game.phase == phAction {
 				p.dumpHand()
@@ -1703,6 +1704,7 @@ go func() {
 	p = &Player{name:"Anonymous", fun:consoleGamer{}, trigger:make(chan bool)}
 	p.deck = make([]*Card, 5, 5)
 	heading := ""
+	pn := 0
 	for _, line := range v[1:] {
 		if len(line) == 0 {
 			continue
@@ -1715,13 +1717,16 @@ go func() {
 		switch heading {
 		case "Players":
 			if line == p.name {
+				p.n = pn
 				game.players = append(game.players, p)
 			} else {
-				other := &Player{name:line, trigger:foo, hidden:true}
+				other := &Player{name:line, trigger:foo}
+				other.n = pn
 				other.deck = make([]*Card, 5, 5)
 				other.hand = make([]*Card, 5, 5)
 				game.players = append(game.players, other)
 			}
+			pn++
 		case "Hand":
 			for _, c := range []byte(line) {
 				p.hand = append(p.hand, game.keyToCard(c))
