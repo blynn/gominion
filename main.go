@@ -368,9 +368,9 @@ func (game *Game) revealHand(p *Player) {
 		if game.isServer {
 			fmt.Printf("%v reveals %v\n", p.name, c.name)
 			game.cast("reveal", c)
+		} else {
+			fmt.Printf("%v reveals %v\n", p.name, game.keyToCard(game.fetch()[0][0]).name)
 		}
-		fmt.Printf("%v reveals %v\n", p.name, game.keyToCard(game.fetch()[0][0]).name)
-		continue
 	}
 }
 
@@ -509,8 +509,39 @@ type pickOpts struct {
 
 func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 	n := o.n
-	var in, out Pile
-	out = append(list)
+	var in Pile
+	out := append(list)
+	// Forced choices.
+	if game.isServer {
+		max := 0
+		var prev *Card
+		same := true
+		for _, c := range out {
+			if o.cond == nil || o.cond(c) == "" {
+				max++
+				if prev == nil {
+					prev = c
+				} else if prev != c {
+					same = false
+				}
+			}
+		}
+		if n > max {
+			n = max
+		}
+		if same && o.exact {
+			log.Print("TODO: automate forced choice")
+		}
+		// TODO: Information leak. Should return either (true, in, out), or
+		// (false, nil, nil), i.e. if the selection is forced, reveal it,
+		// otherwise reveal nothing.
+		game.cast("max", n)
+	} else {
+		n = PanickyAtoi(game.fetch()[0])
+	}
+	if n == 0 {
+		return in, out
+	}
 	game.SetParse(func(b byte) (Command, string) {
 		if b == '/' {
 			if o.exact {
@@ -547,7 +578,7 @@ func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 				for i, c := range out {
 					// nil represents unknown cards.
 					if c == nil || c == cmd.c {
-						in = append(in, c)
+						in = append(in, cmd.c)
 						out = append(out[:i], out[i+1:]...)
 						n--
 						found = true
@@ -570,7 +601,7 @@ func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 	return in, out
 }
 
-func (game *Game) pick(list []*Card, p *Player, o pickOpts) []bool {
+func (game *Game) pick(list Pile, p *Player, o pickOpts) []bool {
 	n := o.n
 	sel := make([]bool, len(list))
 	game.SetParse(func(b byte) (Command, string) {
@@ -970,11 +1001,11 @@ func main() {
 
 	type Preset struct {
 		name string
-		cards []*Card
+		cards Pile
 	}
 	var presets []Preset
 	for _, line := range strings.Split(`
-TEST:Chapel,Baron,Bridge,Conspirator,Coppersmith,Ironworks,Mining Village,Scout,Courtyard,Great Hall
+TEST:Bureaucrat,Baron,Bridge,Conspirator,Coppersmith,Ironworks,Mining Village,Scout,Courtyard,Great Hall
 First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
 Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
 Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village
@@ -989,10 +1020,10 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		for _, s := range strings.Split(s[1], ",") {
 			c := GetCard(s)
 			// Insertion sort.
-			pr.cards = func(cards []*Card) []*Card {
+			pr.cards = func(cards Pile) Pile {
 				for i, x := range cards {
 					if x.cost == c.cost && x.name > c.name || x.cost > c.cost {
-						return append(cards[:i], append([]*Card{c}, cards[i:]...)...)
+						return append(cards[:i], append(Pile{c}, cards[i:]...)...)
 					}
 				}
 				return append(cards, c)
@@ -1488,12 +1519,12 @@ go func() {
 				x = p
 			} else {
 				x = &Player{name:line, trigger:sharedTrigger}
-				x.hand = make([]*Card, 5, 5)
+				x.hand = make(Pile, 5, 5)
 			}
 			game.players = append(game.players, x)
 			x.n = pn
 			x.InitDeck()
-			x.deck = make([]*Card, len(x.manifest) - 5, len(x.manifest))
+			x.deck = make(Pile, len(x.manifest) - 5, len(x.manifest))
 			pn++
 		case "Hand":
 			for _, c := range []byte(line) {

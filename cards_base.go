@@ -77,24 +77,18 @@ Fun: map[string]func(game *Game){
 			p.discard = p.discard[:n-1]
 		}
 		game.attack(func(other *Player) {
-			if !game.inHand(other, isVictory) {
-				game.revealHand(other)
-				return
-			}
-			sel := pickHand(game, other, 1, true, func(c *Card) string {
+			var selected Pile
+			selected, other.hand = game.split(other.hand, other, pickOpts{n:1, exact:true, cond: func(c *Card) string {
 				if !isVictory(c) {
 					return "must pick Victory card"
 				}
 				return ""
-			})
-			for i := len(other.hand)-1; i >= 0; i-- {
-				if sel[i] {
-					fmt.Printf("%v decks %v\n", other.name, other.hand[i].name)
-					other.deck = append(other.hand[i:i+1], other.deck...)
-					other.hand = append(other.hand[:i], other.hand[i+1:]...)
-					break
-				}
+			}})
+			if len(selected) == 0 {
+				game.revealHand(other)
+				return
 			}
+			fmt.Printf("%v decks %v\n", other.name, selected[0].name)
 		})
 	},
 	"Feast": func(game *Game) {
@@ -109,6 +103,8 @@ Fun: map[string]func(game *Game){
 			if len(other.hand) <= 3 {
 				return
 			}
+			// TODO: Information leak.
+			// Should only know discard count and the top discard.
 			sel := pickHand(game, other, 3, true, nil)
 			count := 0
 			for i := len(other.hand)-1; i >= 0; i-- {
@@ -180,7 +176,7 @@ Fun: map[string]func(game *Game){
 	"Thief": func(game *Game) {
 		p := game.NowPlaying()
 		game.attack(func(other *Player) {
-			var v []*Card
+			var v Pile
 			found := 0
 			trashi := 0
 			for i := 0; i < 2 && other.MaybeShuffle(); i++ {
@@ -242,7 +238,7 @@ Fun: map[string]func(game *Game){
 	},
 	"Library": func(game *Game) {
 		p := game.NowPlaying()
-		var v []*Card
+		var v Pile
 		for len(p.hand) < 7 && game.draw(p, 1) == 1 {
 			mustAsk := false
 			if game.isServer {
