@@ -21,14 +21,14 @@ type Kind struct {
 }
 
 type Card struct {
-	key byte
-	name string
-	cost int
-	kind []*Kind
-	coin int
-	vp func(*Game) int
+	key    byte
+	name   string
+	cost   int
+	kind   []*Kind
+	coin   int
+	vp     func(*Game) int
 	supply int
-	act []func(*Game)
+	act    []func(*Game)
 }
 
 func PanickyAtoi(s string) int {
@@ -51,14 +51,14 @@ func (c *Card) HasKind(k *Kind) bool {
 type Pile []*Card
 
 var (
-	KindDict = make(map[string]*Kind)
-	CardDict = make(map[string]*Card)
+	KindDict                             = make(map[string]*Kind)
+	CardDict                             = make(map[string]*Card)
 	kTreasure, kVictory, kCurse, kAction *Kind
 )
 
-func isVictory(c *Card) bool { return c.HasKind(kVictory) }
+func isVictory(c *Card) bool  { return c.HasKind(kVictory) }
 func isTreasure(c *Card) bool { return c.HasKind(kTreasure) }
-func isAction(c *Card) bool { return c.HasKind(kAction) }
+func isAction(c *Card) bool   { return c.HasKind(kAction) }
 
 func GetCard(s string) *Card {
 	c, ok := CardDict[s]
@@ -86,18 +86,23 @@ func (deck *Pile) Add(s string) {
 }
 
 type Game struct {
-	players []*Player
-	n int  // Index of current player.
-	suplist Pile
-	ch chan Command
-	phase int
-	stack []*Frame
-	trash Pile
-	sendCmd func (game *Game, p *Player, cmd *Command)
-	isServer bool
-	fetch func() []string
-	GetDiscard func (game *Game, p *Player) string
-	discount int
+	players    []*Player
+	n          int // Index of current player.
+	a, b, c    int // Actions, Buys, Coins,
+	suplist    Pile
+	ch         chan Command
+	phase      int
+	stack      []*Frame
+	trash      Pile
+	sendCmd    func(game *Game, p *Player, cmd *Command)
+	isServer   bool
+	fetch      func() []string
+	GetDiscard func(game *Game, p *Player) string
+
+	// Actions played. (Can differ to actions spent because of e.g.
+	// Throne Room.)
+	aCount      int
+	discount    int
 	copperbonus int
 }
 
@@ -107,10 +112,14 @@ const (
 	phCleanup
 )
 
+func (game *Game) TrashCard(p *Player, c *Card) {
+	game.trash = append(game.trash, c)
+	game.Report(Event{s: "trash", n: p.n, card: c})
+}
+
 func (game *Game) TrashList(p *Player, list Pile) {
 	for _, c := range list {
-		game.trash = append(game.trash, c)
-		game.Report(Event{s:"trash", n:p.n, card:c})
+		game.TrashCard(p, c)
 	}
 }
 
@@ -123,7 +132,7 @@ func (game *Game) Cost(c *Card) int {
 }
 
 func (game *Game) dump() {
-	cols := []int {3,3,1,3,3,3,1}
+	cols := []int{3, 3, 1, 3, 3, 3, 1}
 	for _, c := range game.suplist {
 		fmt.Printf("  [%c] %v(%v) $%v", c.key, c.name, c.supply, game.Cost(c))
 		cols[0]--
@@ -156,7 +165,7 @@ func (p *Player) dumpHand() {
 	n := 0
 	for _, c := range p.hand {
 		fmt.Printf(" [%c] %v", c.key, c.name)
-		n = (n+1)%5
+		n = (n + 1) % 5
 		if n == 0 {
 			println()
 		}
@@ -169,14 +178,8 @@ func (p *Player) dumpHand() {
 		for _, c := range p.played {
 			fmt.Printf(" %v", c.name)
 		}
-		fmt.Println("");
+		fmt.Println("")
 	}
-}
-
-func (game *Game) TrashHand(p *Player, i int) {
-	game.Report(Event{s:"trash", n:p.n, card:p.hand[i]})
-	game.trash = append(game.trash, p.hand[i])
-	p.hand = append(p.hand[:i], p.hand[i+1:]...)
 }
 
 func (game *Game) keyToCard(key byte) *Card {
@@ -190,7 +193,7 @@ func (game *Game) keyToCard(key byte) *Card {
 
 func (game *Game) MultiPlay(p *Player, c *Card, m int) {
 	var k int
-	for k = len(p.hand)-1; k >= 0; k-- {
+	for k = len(p.hand) - 1; k >= 0; k-- {
 		if p.hand[k] == c {
 			p.hand = append(p.hand[:k], p.hand[k+1:]...)
 			break
@@ -201,14 +204,14 @@ func (game *Game) MultiPlay(p *Player, c *Card, m int) {
 	}
 	p.played = append(p.played, c)
 	if isAction(c) {
-		p.aCount++
+		game.aCount++
 	}
-	for ;m > 0; m-- {
+	for ; m > 0; m-- {
 		if c.act == nil {
 			fmt.Printf("%v unimplemented  :(\n", c.name)
 			return
 		}
-		game.stack = append(game.stack, &Frame{card:c})
+		game.stack = append(game.stack, &Frame{card: c})
 		for _, f := range c.act {
 			f(game)
 		}
@@ -218,39 +221,24 @@ func (game *Game) MultiPlay(p *Player, c *Card, m int) {
 
 func (game *Game) Play(n int, c *Card) {
 	if isAction(c) {
-		game.NowPlaying().a--
+		game.a--
 	}
 	game.MultiPlay(game.players[n], c, 1)
 }
 
 func (game *Game) Spend(n int, c *Card) {
-	p := game.players[n]
-	p.c -= game.Cost(c)
-	p.b--
+	game.c -= game.Cost(c)
+	game.b--
 }
 
-func (game Game) addCoins(n int) {
-	game.NowPlaying().c += n
-}
-
-func (game Game) addActions(n int) {
-	game.NowPlaying().a += n
-}
-
-func (game Game) addBuys(n int) {
-	game.NowPlaying().b += n
-}
-
-func (game Game) addCards(n int) {
-	game.draw(game.NowPlaying(), n)
-}
+func (game *Game) NowPlaying() *Player { return game.players[game.n] }
+func (game *Game) addCoins(n int)      { game.c += n }
+func (game *Game) addActions(n int)    { game.a += n }
+func (game *Game) addBuys(n int)       { game.b += n }
+func (game *Game) addCards(n int)      { game.draw(game.NowPlaying(), n) }
 
 func (game *Game) SetParse(fun func(b byte) (Command, string)) {
 	game.stack[len(game.stack)-1].Parse = fun
-}
-
-func (game *Game) HasStack() bool {
-	return len(game.stack) > 0
 }
 
 func (game *Game) StackTop() *Frame {
@@ -261,13 +249,9 @@ func (game *Game) StackTop() *Frame {
 	return game.stack[n-1]
 }
 
-func (game *Game) NowPlaying() *Player {
-	return game.players[game.n]
-}
-
 type Frame struct {
 	Parse func(b byte) (Command, string)
-	card *Card
+	card  *Card
 }
 
 type Command struct {
@@ -281,22 +265,21 @@ type PlayFun interface {
 }
 
 type Player struct {
-	name string
-	fun PlayFun
-	a, b, c, aCount int  // TODO: Move to Game.
+	name                                  string
+	n                                     int
+	fun                                   PlayFun
 	manifest, deck, hand, played, discard Pile
-	n int
-	trigger chan bool  // When triggered, Player sends a Command on game.ch.
-	recv chan string   // For sending decisions to remote clients.
-	herald chan Event  // Events that may be worth printing.
+	trigger                               chan bool   // When triggered, Player sends a Command on game.ch.
+	recv                                  chan string // For sending decisions to remote clients.
+	herald                                chan Event  // Events that may be worth printing.
 }
 
 type Event struct {
-	s string
+	s    string
 	card *Card
-	n int
-	i int
-	cmd string
+	n    int
+	i    int
+	cmd  string
 }
 
 // MaybeShuffle returns true if deck is non-empty, shuffling the discards
@@ -350,7 +333,7 @@ func (game *Game) draw(p *Player, n int) int {
 		}
 		count = len(w[0])
 	}
-	game.Report(Event{s:"draw", n:p.n, i:count})
+	game.Report(Event{s: "draw", n: p.n, i: count})
 	return count
 }
 
@@ -430,34 +413,33 @@ func (game *Game) CanPlay(p *Player, c *Card) string {
 		return "none in hand"
 	}
 	switch {
-		case isAction(c):
-			if game.phase != phAction {
-				return "wrong phase"
-			}
-			if game.NowPlaying().a == 0 {
-				return "out of actions"
-			}
-		case isTreasure(c):
-			if game.phase != phBuy {
-				return "wrong phase"
-			}
-		default:
-				return "unplayable card"
+	case isAction(c):
+		if game.phase != phAction {
+			return "wrong phase"
+		}
+		if game.a == 0 {
+			return "out of actions"
+		}
+	case isTreasure(c):
+		if game.phase != phBuy {
+			return "wrong phase"
+		}
+	default:
+		return "unplayable card"
 	}
 	return ""
 }
 
 func CanBuy(game *Game, c *Card) string {
-	p := game.NowPlaying()
 	switch {
-		case game.phase != phBuy:
-			return "wrong phase"
-		case p.b == 0:
-			return "no buys left"
-		case game.Cost(c) > p.c:
-			return "insufficient money"
-		case c.supply == 0:
-			return "supply exhausted"
+	case game.phase != phBuy:
+		return "wrong phase"
+	case game.b == 0:
+		return "no buys left"
+	case game.Cost(c) > game.c:
+		return "insufficient money"
+	case c.supply == 0:
+		return "supply exhausted"
 	}
 	return ""
 }
@@ -465,7 +447,7 @@ func CanBuy(game *Game, c *Card) string {
 func (game *Game) Over() {
 	fmt.Printf("Game over\n")
 	for i, p := range game.players {
-		game.n = i  // We want NowPlaying() for some VP computations.
+		game.n = i // We want NowPlaying() for some VP computations.
 		score := 0
 		m := make(map[*Card]struct {
 			count, pts int
@@ -492,8 +474,8 @@ func (game *Game) Over() {
 			}
 		}
 	}
-// TODO: Notify clients that game is over instead of this.
-time.Sleep(1 * time.Second)
+	// TODO: Notify clients that game is over instead of this.
+	time.Sleep(1 * time.Second)
 }
 
 func (game *Game) getCommand(p *Player) Command {
@@ -508,9 +490,9 @@ func (game *Game) getCommand(p *Player) Command {
 }
 
 type pickOpts struct {
-	n int
+	n     int
 	exact bool
-	cond func(*Card) string
+	cond  func(*Card) string
 }
 
 func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
@@ -538,9 +520,6 @@ func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 		if same && o.exact {
 			log.Print("TODO: automate forced choice")
 		}
-		// TODO: Information leak. Should return either (true, in, out), or
-		// (false, nil, nil), i.e. if the selection is forced, reveal it,
-		// otherwise reveal nothing.
 		game.cast("max", n)
 	} else {
 		n = PanickyAtoi(game.fetch()[0])
@@ -553,7 +532,7 @@ func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 			if o.exact {
 				return errCmd, "must pick a card"
 			}
-			return Command{s:"done"}, ""
+			return Command{s: "done"}, ""
 		}
 		choice := game.keyToCard(b)
 		if choice == nil {
@@ -574,34 +553,34 @@ func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 				return errCmd, msg
 			}
 		}
-		return Command{s:"pick", c:choice}, ""
+		return Command{s: "pick", c: choice}, ""
 	})
 	for stop := false; !stop; {
 		cmd := game.getCommand(p)
 		switch cmd.s {
-			case "pick":
-				found := false
-				for i, c := range out {
-					// nil represents unknown cards.
-					if c == nil || c == cmd.c {
-						in = append(in, cmd.c)
-						out = append(out[:i], out[i+1:]...)
-						n--
-						found = true
-						break
-					}
+		case "pick":
+			found := false
+			for i, c := range out {
+				// nil represents unknown cards.
+				if c == nil || c == cmd.c {
+					in = append(in, cmd.c)
+					out = append(out[:i], out[i+1:]...)
+					n--
+					found = true
+					break
 				}
-				if !found {
-					panic("invalid selection")
-				}
-				stop = n == 0
-			case "done":
-				if o.exact && n > 0 {
-					panic("must pick more")
-				}
-				stop = true
-			default:
-			  panic("bad command: " + cmd.s)
+			}
+			if !found {
+				panic("invalid selection")
+			}
+			stop = n == 0
+		case "done":
+			if o.exact && n > 0 {
+				panic("must pick more")
+			}
+			stop = true
+		default:
+			panic("bad command: " + cmd.s)
 		}
 	}
 	return in, out
@@ -611,7 +590,7 @@ func (game *Game) Gain(p *Player, c *Card) {
 	if c.supply == 0 {
 		panic("out of supply")
 	}
-	game.Report(Event{s:"gain", n:p.n, card:c})
+	game.Report(Event{s: "gain", n: p.n, card: c})
 	p.discard = append(p.discard, c)
 	c.supply--
 }
@@ -627,21 +606,19 @@ func (game *Game) MaybeGain(p *Player, c *Card) bool {
 func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 	game.SetParse(func(b byte) (Command, string) {
 		c := game.keyToCard(b)
-		if c == nil {
+		switch {
+		case c == nil:
 			return errCmd, "expected card"
-		}
-		if game.Cost(c) > max {
+		case game.Cost(c) > max:
 			return errCmd, "too expensive"
-		}
-		if c.supply == 0 {
+		case c.supply == 0:
 			return errCmd, "supply exhausted"
-		}
-		if fun != nil {
+		case fun != nil:
 			if msg := fun(c); msg != "" {
 				return errCmd, msg
 			}
 		}
-		return Command{s:"pick", c:c}, ""
+		return Command{s: "pick", c: c}, ""
 	})
 	p := game.NowPlaying()
 	cmd := game.getCommand(p)
@@ -655,9 +632,7 @@ func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 	return cmd.c
 }
 
-func pickGain(game *Game, max int) *Card {
-	return pickGainCond(game, max, nil)
-}
+func pickGain(game *Game, max int) *Card { return pickGainCond(game, max, nil) }
 
 var errCmd Command
 
@@ -689,7 +664,7 @@ func reacts(game *Game, p *Player) bool {
 		return false
 	}
 	var selected Pile
-	selected, _ = game.split(p.hand, p, pickOpts{n:1, cond:func(c *Card) string {
+	selected, _ = game.split(p.hand, p, pickOpts{n: 1, cond: func(c *Card) string {
 		if c.name != "Moat" {
 			return "pick Moat or nothing"
 		}
@@ -708,14 +683,14 @@ func reacts(game *Game, p *Player) bool {
 
 func (game *Game) ForOthers(fun func(*Player)) {
 	m := len(game.players)
-	for i := (game.n+1)%m; i != game.n; i = (i+1)%m {
+	for i := (game.n + 1) % m; i != game.n; i = (i + 1) % m {
 		fun(game.players[i])
 	}
 }
 
 func (game *Game) attack(fun func(*Player)) {
 	m := len(game.players)
-	for i := (game.n+1)%m; i != game.n; i = (i+1)%m {
+	for i := (game.n + 1) % m; i != game.n; i = (i + 1) % m {
 		other := game.players[i]
 		fmt.Printf("%v attacks %v\n", game.NowPlaying().name, other.name)
 		if reacts(game, other) {
@@ -728,10 +703,10 @@ func (game *Game) attack(fun func(*Player)) {
 func (game *Game) getBool(p *Player) bool {
 	game.SetParse(func(b byte) (Command, string) {
 		switch b {
-			case '\\':
-				return Command{s:"yes"}, ""
-			case '.':
-				return Command{s:"done"}, ""
+		case '\\':
+			return Command{s: "yes"}, ""
+		case '.':
+			return Command{s: "done"}, ""
 		}
 		return errCmd, "\\ for yes, . for no"
 	})
@@ -747,8 +722,8 @@ func (game *Game) getBool(p *Player) bool {
 
 type CardDB struct {
 	List string
-	Fun map[string]func(game *Game)
-	VP map[string]func(game *Game) int
+	Fun  map[string]func(game *Game)
+	VP   map[string]func(game *Game) int
 }
 
 func loadDB(db CardDB) {
@@ -763,11 +738,11 @@ func loadDB(db CardDB) {
 		if _, ok := CardDict[a[0]]; ok {
 			panic(s)
 		}
-		cost, err := strconv.Atoi(a[1]);
+		cost, err := strconv.Atoi(a[1])
 		if err != nil {
 			panic(s)
 		}
-		c := &Card{name:a[0], cost:cost}
+		c := &Card{name: a[0], cost: cost}
 		for _, s := range strings.Split(a[2], "-") {
 			kind, ok := KindDict[s]
 			if !ok {
@@ -788,14 +763,14 @@ func loadDB(db CardDB) {
 				c.vp = func(game *Game) int { return PanickyAtoi(s[1:]) }
 			case '+':
 				switch s[1] {
-					case 'A':
-						add(func(game *Game) { game.addActions(PanickyAtoi(s[2:])) })
-					case 'B':
-						add(func(game *Game) { game.addBuys(PanickyAtoi(s[2:])) })
-					case 'C':
-						add(func(game *Game) { game.addCards(PanickyAtoi(s[2:])) })
-					default:
-						panic(s)
+				case 'A':
+					add(func(game *Game) { game.addActions(PanickyAtoi(s[2:])) })
+				case 'B':
+					add(func(game *Game) { game.addBuys(PanickyAtoi(s[2:])) })
+				case 'C':
+					add(func(game *Game) { game.addCards(PanickyAtoi(s[2:])) })
+				default:
+					panic(s)
 				}
 			default:
 				panic(s)
@@ -805,7 +780,7 @@ func loadDB(db CardDB) {
 			add(fun)
 		}
 		if fun, ok := db.VP[c.name]; ok {
-		  c.vp = fun
+			c.vp = fun
 		}
 	}
 }
@@ -837,15 +812,15 @@ func main() {
 			} else {
 				game.cast("cmd", cmd.s, cmd.c)
 			}
-	  },
+		},
 	}
 	ng := netGamer{
-		in: make(chan Command),
+		in:  make(chan Command),
 		out: make(chan string),
 	}
 	game.players = []*Player{
-		&Player{name:"Anonymous", fun:ng},
-		&Player{name:"Ben", fun:consoleGamer{}},
+		&Player{name: "Anonymous", fun: ng},
+		&Player{name: "Ben", fun: consoleGamer{}},
 		//&Player{name:"AI", fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
 	}
 	players := game.players
@@ -855,7 +830,7 @@ func main() {
 	})
 
 	http.HandleFunc("/poll", func(w http.ResponseWriter, r *http.Request) {
-		ng.in <- Command{s:"poll"}
+		ng.in <- Command{s: "poll"}
 		fmt.Fprintf(w, <-ng.out)
 	})
 
@@ -865,7 +840,7 @@ func main() {
 			fmt.Fprintf(w, "error: no command")
 			return
 		}
-		cmd := Command{s:s}
+		cmd := Command{s: s}
 		if c := r.FormValue("c"); c != "" {
 			if len(c) != 1 {
 				fmt.Fprintf(w, "error: malformed card")
@@ -880,10 +855,10 @@ func main() {
 		fmt.Fprintf(w, <-ng.out)
 	})
 
-  go func() {
+	go func() {
 		log.Fatal(http.ListenAndServe(":8080", nil))
 	}()
-	for n := 0;; n++ {
+	for n := 0; ; n++ {
 		resp, err := http.Get("http://:8080/")
 		if err != nil {
 			if n > 3 {
@@ -893,7 +868,7 @@ func main() {
 			continue
 		}
 		defer resp.Body.Close()
-		break;
+		break
 	}
 
 	setSupply := func(s string, n int) {
@@ -903,22 +878,25 @@ func main() {
 		}
 		c.supply = n
 	}
-	setSupply("Copper", 60 - 7*len(players))
+	setSupply("Copper", 60-7*len(players))
 	setSupply("Silver", 40)
 	setSupply("Gold", 30)
 
 	numVictoryCards := func(n int) int {
 		switch n {
-		case 2: return 8
-		case 3: return 12
-		case 4: return 12
+		case 2:
+			return 8
+		case 3:
+			return 12
+		case 4:
+			return 12
 		}
 		panic(n)
 	}
 	for _, s := range []string{"Estate", "Duchy", "Province"} {
 		setSupply(s, numVictoryCards(len(players)))
 	}
-	setSupply("Curse", 10*(len(players) - 1))
+	setSupply("Curse", 10*(len(players)-1))
 	layout := func(s string, key byte) {
 		c := GetCard(s)
 		game.suplist = append(game.suplist, c)
@@ -934,7 +912,7 @@ func main() {
 	keys := "asdfgzxcvb"
 
 	type Preset struct {
-		name string
+		name  string
 		cards Pile
 	}
 	var presets []Preset
@@ -949,7 +927,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 			continue
 		}
 		s := strings.Split(line, ":")
-		pr := Preset{name:s[0]}
+		pr := Preset{name: s[0]}
 		for _, s := range strings.Split(s[1], ",") {
 			c := GetCard(s)
 			// Insertion sort.
@@ -969,7 +947,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 	for _, pr := range presets {
 		fmt.Printf("  %v", pr.name)
 	}
-	fmt.Println();
+	fmt.Println()
 	pr := presets[rand.Intn(len(presets))]
 	fmt.Printf("Playing %q\n", pr.name)
 	for i, c := range pr.cards {
@@ -982,13 +960,13 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		p.deck.shuffle()
 		p.hand, p.deck = p.deck[:5], p.deck[5:]
 		p.trigger = make(chan bool)
-		p.n = i;
+		p.n = i
 		go p.fun.start(game, p)
 	}
 	game.GetDiscard = func(game *Game, p *Player) string {
 		if len(p.discard) == 0 {
-		log.Print("BUG ", p.name)
-		return "BUG!"
+			log.Print("BUG ", p.name)
+			return "BUG!"
 		}
 		return p.discard[len(p.discard)-1].name
 	}
@@ -996,37 +974,37 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 }
 
 func (game *Game) mainloop() {
-	for game.n = 0;; game.n = (game.n+1) % len(game.players) {
-		p := game.NowPlaying()
-		p.a, p.b, p.c = 1, 1, 0
+	for game.n = 0; ; game.n = (game.n + 1) % len(game.players) {
+		game.a, game.b, game.c = 1, 1, 0
 		fresh := true
 		game.discount = 0
 		game.copperbonus = 0
-		p.aCount = 0
+		game.aCount = 0
+		p := game.NowPlaying()
 		for game.phase = phAction; game.phase <= phCleanup; {
 			if fresh {
-				game.Report(Event{s:"phase"})
+				game.Report(Event{s: "phase"})
 				fresh = false
 			}
 			cmd := game.getCommand(p)
 			switch cmd.s {
-				case "buy":
-					choice := cmd.c
-					if err := CanBuy(game, choice); err != "" {
-						panic(err)
-					}
-fmt.Printf("%v buys %v for $%v\n", game.players[game.n].name, choice.name, game.Cost(choice))
-					game.Spend(game.n, choice)
-					game.Gain(p, choice)
-				case "play":
-					if err := game.CanPlay(p, cmd.c); err != "" {
-						panic(err)
-					}
-fmt.Printf("%v plays %v\n", game.players[game.n].name, cmd.c.name)
-					game.Play(game.n, cmd.c)
-				case "next":
-					game.phase++
-					fresh = true
+			case "buy":
+				choice := cmd.c
+				if err := CanBuy(game, choice); err != "" {
+					panic(err)
+				}
+				fmt.Printf("%v buys %v for $%v\n", game.players[game.n].name, choice.name, game.Cost(choice))
+				game.Spend(game.n, choice)
+				game.Gain(p, choice)
+			case "play":
+				if err := game.CanPlay(p, cmd.c); err != "" {
+					panic(err)
+				}
+				fmt.Printf("%v plays %v\n", game.players[game.n].name, cmd.c.name)
+				game.Play(game.n, cmd.c)
+			case "next":
+				game.phase++
+				fresh = true
 			}
 		}
 		game.Cleanup(p)
@@ -1051,7 +1029,7 @@ fmt.Printf("%v plays %v\n", game.players[game.n].name, cmd.c.name)
 	}
 }
 
-type consoleGamer struct {}
+type consoleGamer struct{}
 
 func (consoleGamer) start(game *Game, p *Player) {
 	p.herald = make(chan Event)
@@ -1061,161 +1039,164 @@ func (consoleGamer) start(game *Game, p *Player) {
 	prog := ""
 	wildCard := false
 	buyMode := false
-	for { select {
-	case ev := <-p.herald:
-		x := game.players[ev.n]
-		switch ev.s {
-		case "discard":
-			if ev.i == 0 {
-				log.Print("BUG: reported 0 discards")
-			}
-			fmt.Printf("%v discards %v cards (%v)\n", x.name, ev.i, game.GetDiscard(game, x))
-		case "discarddeck":
-			fmt.Printf("%v discards deck; %v cards (%v)\n", x.name, ev.i, game.GetDiscard(game, x))
-		case "gain":
-			fmt.Printf("%v gains %v\n", x.name, ev.card.name)
-			x.manifest = append(x.manifest, ev.card)
-		case "trash":
-			fmt.Printf("%v trashes %v\n", x.name, ev.card.name)
-			for i, c := range x.manifest {
-				if c == ev.card {
-					x.manifest = append(x.manifest[:i], x.manifest[i+1:]...)
-					break
+	for {
+		select {
+		case ev := <-p.herald:
+			x := game.players[ev.n]
+			switch ev.s {
+			case "discard":
+				if ev.i == 0 {
+					log.Print("BUG: reported 0 discards")
+				}
+				fmt.Printf("%v discards %v cards (%v)\n", x.name, ev.i, game.GetDiscard(game, x))
+			case "discarddeck":
+				fmt.Printf("%v discards deck; %v cards (%v)\n", x.name, ev.i, game.GetDiscard(game, x))
+			case "gain":
+				fmt.Printf("%v gains %v\n", x.name, ev.card.name)
+				x.manifest = append(x.manifest, ev.card)
+			case "trash":
+				fmt.Printf("%v trashes %v\n", x.name, ev.card.name)
+				for i, c := range x.manifest {
+					if c == ev.card {
+						x.manifest = append(x.manifest[:i], x.manifest[i+1:]...)
+						break
+					}
+				}
+			case "phase":
+				if x == p && game.phase == phAction {
+					p.dumpHand()
+				}
+			case "draw":
+				if x != p {
+					fmt.Printf("%v draws %v cards\n", x.name, ev.i)
+				} else {
+					for i := ev.i; i > 0; i-- {
+						c := p.hand[len(p.hand)-i]
+						fmt.Printf("%v draws [%c] %v\n", p.name, c.key, c.name)
+					}
 				}
 			}
-		case "phase":
-			if x == p && game.phase == phAction {
-				p.dumpHand()
-			}
-		case "draw":
-			if x != p {
-				fmt.Printf("%v draws %v cards\n", x.name, ev.i)
-			} else {
-				for i := ev.i; i > 0; i-- {
-					c := p.hand[len(p.hand)-i]
-					fmt.Printf("%v draws [%c] %v\n", p.name, c.key, c.name)
+		case <-p.trigger:
+			game.ch <- func() Command {
+				// Automatically advance to next phase when it's obvious.
+				frame := game.StackTop()
+				if frame == nil {
+					if game.phase == phAction && (game.a == 0 || !p.inHand(isAction)) {
+						return Command{s: "next"}
+					}
+					if game.phase == phBuy && game.b == 0 {
+						return Command{s: "next"}
+					}
+					if game.phase == phCleanup {
+						return Command{s: "next"}
+					}
+					if game.phase != phBuy {
+						buyMode = false
+					} else if !p.inHand(isTreasure) {
+						buyMode = true
+					}
 				}
-			}
-		}
-	case <-p.trigger:
-		game.ch <- func() Command {
-			// Automatically advance to next phase when it's obvious.
-			frame := game.StackTop()
-			if frame == nil {
-				if game.phase == phAction && (p.a == 0 || !p.inHand(isAction)) {
-					return Command{s:"next"}
-				}
-				if game.phase == phBuy && p.b == 0 {
-					return Command{s:"next"}
-				}
-				if game.phase == phCleanup {
-					return Command{s:"next"}
-				}
-				if game.phase != phBuy {
-					buyMode = false
-				} else if !p.inHand(isTreasure) {
-					buyMode = true
-				}
-			}
 
-			for {
-				if wildCard {
-					if game.phase == phBuy {
-						for k := len(p.hand)-1; k >= 0; k-- {
-							if isTreasure(p.hand[k]) {
-								return Command{s:"play", c:p.hand[k]}
+				for {
+					if wildCard {
+						if game.phase == phBuy {
+							for k := len(p.hand) - 1; k >= 0; k-- {
+								if isTreasure(p.hand[k]) {
+									return Command{s: "play", c: p.hand[k]}
+								}
 							}
 						}
+						wildCard = false
 					}
-					wildCard = false
-				}
-				i++
-				for i >= len(prog) {
-					fmt.Printf("a:%v b:%v c:%v %v", p.a, p.b, p.c, p.name)
-					if frame != nil {
-						fmt.Printf(" %v", frame.card.name)
+					i++
+					for i >= len(prog) {
+						fmt.Printf("a:%v b:%v c:%v %v", game.a, game.b, game.c, p.name)
+						if frame != nil {
+							fmt.Printf(" %v", frame.card.name)
+						}
+						fmt.Printf("> ")
+						s, err := reader.ReadString('\n')
+						if err == io.EOF {
+							fmt.Printf("\nQuitting game...\n")
+							return Command{s: "quit"}
+						}
+						if err != nil {
+							panic(err)
+						}
+						prog, i = s, 0
 					}
-					fmt.Printf("> ")
-					s, err := reader.ReadString('\n')
-					if err == io.EOF {
-						fmt.Printf("\nQuitting game...\n")
-						return Command{s:"quit"}
-					}
-					if err != nil {
-						panic(err)
-					}
-					prog, i = s, 0
-				}
-				match := true
-				switch prog[i] {
-				case '\n':
-				case ' ':
-				case '?':
-					game.dump()
-					p.dumpHand()
-				default:
-					match = false
-				}
-				if (match) {
-					continue
-				}
-				msg := ""
-				if frame != nil {
-					var cmd Command
-					if cmd, msg = frame.Parse(prog[i]); msg == "" {
-						return cmd
-					}
-				} else {
+					match := true
 					switch prog[i] {
-					case '+': fallthrough
-					case ';':
-						if game.phase != phBuy {
-							msg = "wrong phase"
-							break
-						}
-						if p.inHand(isTreasure) {
-							buyMode = !buyMode
-						}
-					case '.':
-						return Command{s:"next"}
-					case '*':
-						if game.phase != phBuy {
-							msg = "wrong phase"
-							break
-						}
-						wildCard = true
+					case '\n':
+					case ' ':
+					case '?':
+						game.dump()
+						p.dumpHand()
 					default:
-						c := game.keyToCard(prog[i])
-						if c == nil {
-							msg = "unrecognized command"
-							break
+						match = false
+					}
+					if match {
+						continue
+					}
+					msg := ""
+					if frame != nil {
+						var cmd Command
+						if cmd, msg = frame.Parse(prog[i]); msg == "" {
+							return cmd
 						}
-						if buyMode {
-							if msg = CanBuy(game, c); msg != "" {
+					} else {
+						switch prog[i] {
+						case '+':
+							fallthrough
+						case ';':
+							if game.phase != phBuy {
+								msg = "wrong phase"
 								break
 							}
-							return Command{s:"buy", c:c}
+							if p.inHand(isTreasure) {
+								buyMode = !buyMode
+							}
+						case '.':
+							return Command{s: "next"}
+						case '*':
+							if game.phase != phBuy {
+								msg = "wrong phase"
+								break
+							}
+							wildCard = true
+						default:
+							c := game.keyToCard(prog[i])
+							if c == nil {
+								msg = "unrecognized command"
+								break
+							}
+							if buyMode {
+								if msg = CanBuy(game, c); msg != "" {
+									break
+								}
+								return Command{s: "buy", c: c}
+							}
+							if msg = game.CanPlay(p, c); msg != "" {
+								break
+							}
+							return Command{s: "play", c: c}
 						}
-						if msg = game.CanPlay(p, c); msg != "" {
-							break
-						}
-						return Command{s:"play", c:c}
 					}
-				}
 
-				if msg != "" {
-					fmt.Printf("Error: %v\n  %v\n  ", msg, prog)
-					for j := 0; j < i; j++ {
-						fmt.Printf(" ")
+					if msg != "" {
+						fmt.Printf("Error: %v\n  %v\n  ", msg, prog)
+						for j := 0; j < i; j++ {
+							fmt.Printf(" ")
+						}
+						fmt.Printf("^\n")
+						prog, i = "", 0
+						continue
 					}
-					fmt.Printf("^\n")
-					prog, i = "", 0
-					continue
 				}
-			}
-			panic("unreachable")
-		}()
-	}}
+				panic("unreachable")
+			}()
+		}
+	}
 }
 
 type simpleBuyer struct {
@@ -1230,7 +1211,7 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 			case "Bureaucrat":
 				for _, c := range p.hand {
 					if isVictory(c) {
-						game.ch <- Command{s:"pick", c:c}
+						game.ch <- Command{s: "pick", c: c}
 						<-p.trigger
 						break
 					}
@@ -1239,7 +1220,7 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 			case "Militia":
 				// TODO: Better discard strategy.
 				for i := 0; i < 3; i++ {
-					game.ch <- Command{s:"pick", c:p.hand[i]}
+					game.ch <- Command{s: "pick", c: p.hand[i]}
 					<-p.trigger
 				}
 			default:
@@ -1247,31 +1228,31 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 			}
 			continue
 		}
-		game.ch<- func() Command {
+		game.ch <- func() Command {
 			switch game.phase {
 			case phAction:
-				return Command{s:"next"}
+				return Command{s: "next"}
 			case phCleanup:
-				return Command{s:"next"}
+				return Command{s: "next"}
 			}
 			if game.phase != phBuy {
 				panic("unreachable")
 			}
-			if p.b == 0 {
-				return Command{s:"next"}
+			if game.b == 0 {
+				return Command{s: "next"}
 			}
-			for k := len(p.hand)-1; k >= 0; k-- {
+			for k := len(p.hand) - 1; k >= 0; k-- {
 				if isTreasure(p.hand[k]) {
-					return Command{s:"play", c:p.hand[k]}
+					return Command{s: "play", c: p.hand[k]}
 				}
 			}
 			for _, s := range this.list {
 				c := GetCard(s)
-				if p.c >= game.Cost(c) {
-					return Command{s:"buy", c:c}
+				if game.c >= game.Cost(c) {
+					return Command{s: "buy", c: c}
 				}
 			}
-			return Command{s:"next"}
+			return Command{s: "next"}
 		}()
 	}
 }
@@ -1301,7 +1282,7 @@ func encodePlayers(ps []*Player) string {
 }
 
 type netGamer struct {
-	in chan Command
+	in  chan Command
 	out chan string
 }
 
@@ -1345,7 +1326,7 @@ func (this netGamer) start(game *Game, p *Player) {
 					this.out <- "error: not ready"
 				} else {
 					ready = false
-					game.ch<-cmd;
+					game.ch <- cmd
 					this.out <- "sent"
 				}
 			}
@@ -1354,7 +1335,7 @@ func (this netGamer) start(game *Game, p *Player) {
 }
 
 func client(host string) {
-	host = "http://"+host+"/"
+	host = "http://" + host + "/"
 	send := func(u string) string {
 		resp, err := http.Get(u)
 		if err != nil {
@@ -1391,48 +1372,48 @@ func client(host string) {
 	game := &Game{
 		ch: make(chan Command),
 		sendCmd: func(game *Game, other *Player, cmd *Command) {
-	if p != other {
-		return
+			if p != other {
+				return
+			}
+			v = next()
+			if v[0] != "go" {
+				log.Fatalf("want 'go', got %q", v[0])
+			}
+			u := host + "cmd?s=" + cmd.s
+			if cmd.c != nil {
+				u += "&c=" + string(cmd.c.key)
+			}
+			send(u)
+			confirm := game.fetch()
+			if confirm[0] != cmd.s {
+				log.Fatalf("want %q, got %q", cmd.s, confirm[0])
+			}
+			if len(confirm) == 2 && confirm[1] != string(cmd.c.key) {
+				log.Fatalf("want %q, got %q", string(cmd.c.key), confirm[1])
+			}
+		}, GetDiscard: func(game *Game, p *Player) string {
+			return send(fmt.Sprintf("%vdiscard?n=%v", host, p.n))
+		}}
+	game.fetch = func() []string {
+		return next()[1:]
 	}
-	v = next()
-	if v[0] != "go" {
-		log.Fatalf("want 'go', got %q", v[0])
-	}
-	u := host + "cmd?s=" + cmd.s
-	if cmd.c != nil {
-		u += "&c=" + string(cmd.c.key)
-	}
-	send(u)
-	confirm := game.fetch()
-	if confirm[0] != cmd.s {
-		log.Fatalf("want %q, got %q", cmd.s, confirm[0])
-	}
-	if len(confirm) == 2 && confirm[1] != string(cmd.c.key) {
-		log.Fatalf("want %q, got %q", string(cmd.c.key), confirm[1])
-	}
-}, GetDiscard: func(game *Game, p *Player) string {
-	return send(fmt.Sprintf("%vdiscard?n=%v", host, p.n))
-}}
-game.fetch = func() []string {
-	return next()[1:]
-}
 
-sharedTrigger := make(chan bool)
-go func() {
-	for {
-		<-sharedTrigger
-		w := game.fetch()
-		switch len(w) {
-		default:
-			log.Fatal("bad command ", w)
-		case 1:
-			game.ch <- Command{s:w[0]}
-		case 2:
-			game.ch <- Command{s:w[0], c:game.keyToCard(w[1][0])}
+	sharedTrigger := make(chan bool)
+	go func() {
+		for {
+			<-sharedTrigger
+			w := game.fetch()
+			switch len(w) {
+			default:
+				log.Fatal("bad command ", w)
+			case 1:
+				game.ch <- Command{s: w[0]}
+			case 2:
+				game.ch <- Command{s: w[0], c: game.keyToCard(w[1][0])}
+			}
 		}
-	}
-}()
-	p = &Player{name:"Anonymous", fun:consoleGamer{}, trigger:make(chan bool)}
+	}()
+	p = &Player{name: "Anonymous", fun: consoleGamer{}, trigger: make(chan bool)}
 	heading := ""
 	pn := 0
 	for _, line := range v[1:] {
@@ -1446,17 +1427,17 @@ go func() {
 		}
 		switch heading {
 		case "Players":
-		  var x *Player
+			var x *Player
 			if line == p.name {
 				x = p
 			} else {
-				x = &Player{name:line, trigger:sharedTrigger}
+				x = &Player{name: line, trigger: sharedTrigger}
 				x.hand = make(Pile, 5, 5)
 			}
 			game.players = append(game.players, x)
 			x.n = pn
 			x.InitDeck()
-			x.deck = make(Pile, len(x.manifest) - 5, len(x.manifest))
+			x.deck = make(Pile, len(x.manifest)-5, len(x.manifest))
 			pn++
 		case "Hand":
 			for _, c := range []byte(line) {
