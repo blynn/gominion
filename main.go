@@ -107,6 +107,13 @@ const (
 	phCleanup
 )
 
+func (game *Game) TrashList(p *Player, list Pile) {
+	for _, c := range list {
+		game.trash = append(game.trash, c)
+		game.Report(Event{s:"trash", n:p.n, card:c})
+	}
+}
+
 func (game *Game) Cost(c *Card) int {
 	n := c.cost - game.discount
 	if n < 0 {
@@ -181,8 +188,7 @@ func (game *Game) keyToCard(key byte) *Card {
 	return nil
 }
 
-func (game *Game) MultiPlay(n int, c *Card, m int) {
-	p := game.players[n]
+func (game *Game) MultiPlay(p *Player, c *Card, m int) {
 	var k int
 	for k = len(p.hand)-1; k >= 0; k-- {
 		if p.hand[k] == c {
@@ -214,7 +220,7 @@ func (game *Game) Play(n int, c *Card) {
 	if isAction(c) {
 		game.NowPlaying().a--
 	}
-	game.MultiPlay(n, c, 1)
+	game.MultiPlay(game.players[n], c, 1)
 }
 
 func (game *Game) Spend(n int, c *Card) {
@@ -543,7 +549,7 @@ func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 		return in, out
 	}
 	game.SetParse(func(b byte) (Command, string) {
-		if b == '/' {
+		if b == '.' {
 			if o.exact {
 				return errCmd, "must pick a card"
 			}
@@ -605,7 +611,7 @@ func (game *Game) pick(list Pile, p *Player, o pickOpts) []bool {
 	n := o.n
 	sel := make([]bool, len(list))
 	game.SetParse(func(b byte) (Command, string) {
-		if b == '/' {
+		if b == '.' {
 			return Command{s:"done"}, ""
 		}
 		choice := game.keyToCard(b)
@@ -796,10 +802,10 @@ func (game *Game) getBool(p *Player) bool {
 		switch b {
 			case '\\':
 				return Command{s:"yes"}, ""
-			case '/':
+			case '.':
 				return Command{s:"done"}, ""
 		}
-		return errCmd, "\\ for yes, / for no"
+		return errCmd, "\\ for yes, . for no"
 	})
 	cmd := game.getCommand(p)
 	switch cmd.s {
@@ -1005,7 +1011,7 @@ func main() {
 	}
 	var presets []Preset
 	for _, line := range strings.Split(`
-TEST:Bureaucrat,Baron,Bridge,Conspirator,Coppersmith,Ironworks,Mining Village,Scout,Courtyard,Great Hall
+TEST:Mine,Militia,Bridge,Conspirator,Coppersmith,Ironworks,Mining Village,Scout,Courtyard,Great Hall
 First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
 Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
 Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village

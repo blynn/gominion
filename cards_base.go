@@ -56,10 +56,7 @@ Fun: map[string]func(game *Game){
 		p := game.NowPlaying()
 		var selected Pile
 		selected, p.hand = game.split(p.hand, p, pickOpts{n:4})
-		for _, c := range selected {
-			game.trash = append(game.trash, c)
-			game.Report(Event{s:"trash", n:p.n, card:c})
-		}
+		game.TrashList(p, selected)
 	},
 	"Chancellor": func(game *Game) {
 		p := game.NowPlaying()
@@ -105,17 +102,11 @@ Fun: map[string]func(game *Game){
 			}
 			// TODO: Information leak.
 			// Should only know discard count and the top discard.
-			sel := pickHand(game, other, 3, true, nil)
-			count := 0
-			for i := len(other.hand)-1; i >= 0; i-- {
-				if !sel[i] {
-					other.discard = append(other.discard, other.hand[i])
-					other.hand = append(other.hand[:i], other.hand[i+1:]...)
-					count++
-				}
-			}
-			if count > 0 {
-				game.Report(Event{s:"discard", n:other.n, i:count})
+			var lost Pile
+			other.hand, lost = game.split(other.hand, other, pickOpts{n:3, exact:true})
+			other.discard = append(other.discard, lost...)
+			if len(lost) > 0 {
+				game.Report(Event{s:"discard", n:other.n, i:len(lost)})
 			}
 		})
 	},
@@ -146,18 +137,12 @@ Fun: map[string]func(game *Game){
 	},
 	"Remodel": func(game *Game) {
 		p := game.NowPlaying()
-		if len(p.hand) == 0 {
-			return
+		var selected Pile
+		selected, p.hand = game.split(p.hand, p, pickOpts{n:1, exact:true})
+		if len(selected) > 0 {
+			pickGain(game, game.Cost(selected[0]) + 2)
+			game.TrashList(p, selected)
 		}
-		sel := pickHand(game, p, 1, true, nil)
-		for i, c := range p.hand {
-			if sel[i] {
-				game.TrashHand(p, i)
-				pickGain(game, game.Cost(c) + 2)
-				return
-			}
-		}
-		panic("unreachable")
 	},
 	"Spy": func(game *Game) {
 		p := game.NowPlaying()
@@ -176,40 +161,33 @@ Fun: map[string]func(game *Game){
 	"Thief": func(game *Game) {
 		p := game.NowPlaying()
 		game.attack(func(other *Player) {
-			var v Pile
-			found := 0
-			trashi := 0
+			var loot, junk Pile
 			for i := 0; i < 2 && other.MaybeShuffle(); i++ {
 				c := game.reveal(other)
 				other.deck = other.deck[1:]
-				v = append(v, c)
 				if isTreasure(c) {
-					trashi = i
-					found++
+					loot = append(loot, c)
+				} else {
+					junk = append(junk, c)
 				}
 			}
-			if found > 1 {
-				sel := game.pick(v, p, pickOpts{n:1, exact:true, cond:func(c *Card) string {
+			if len(loot) > 1 {
+				var rest Pile
+				loot, rest = game.split(loot, p, pickOpts{n:1, exact:true, cond:func(c *Card) string {
 					if !isTreasure(c) {
 						return "must pick Treasure"
 					}
 					return ""
 				}})
-				for i, b := range sel {
-					if b {
-						trashi = i
-					}
-				}
+				junk = append(junk, rest...)
 			}
-			if found > 0 {
-				c := v[trashi]
-				game.Report(Event{s:"trash", n:other.n, card:c})
-				v = append(v[:trashi], v[trashi+1:]...)
+			game.TrashList(other, loot)
+			for _, c := range loot {
 				if c.supply > 0 && game.getBool(p) {
 					game.Gain(p, c)
 				}
 			}
-			for _, c := range v {
+			for _, c := range junk {
 				fmt.Printf("%v discards %v\n", other.name, c.name)
 				other.discard = append(other.discard, c)
 			}
@@ -217,21 +195,14 @@ Fun: map[string]func(game *Game){
 	},
 	"Throne Room": func(game *Game) {
 		p := game.NowPlaying()
-		if !game.inHand(p, isAction) {
-			return
-		}
-		sel := pickHand(game, p, 1, true, func(c *Card) string {
+		var selected Pile
+		selected, p.hand = game.split(p.hand, p, pickOpts{n:1, exact:true, cond:func(c *Card) string {
 			if !isAction(c) {
 				return "must pick Action"
 			}
 			return ""
-		})
-		for i, _ := range p.hand {
-			if sel[i] {
-				game.MultiPlay(p.n, p.hand[i], 2)
-				return
-			}
-		}
+		}})
+		game.MultiPlay(p, selected[0], 2)
 	},
 	"Council Room": func(game *Game) {
 		game.ForOthers(func(other *Player) { game.draw(other, 1) })
@@ -269,27 +240,21 @@ Fun: map[string]func(game *Game){
 	},
 	"Mine": func(game *Game) {
 		p := game.NowPlaying()
-		if !game.inHand(p, isTreasure) {
-			return
-		}
+		var selected Pile
 		f := func(c *Card) string {
 			if !isTreasure(c) {
 				return "must pick Treasure"
 			}
 			return ""
 		}
-		sel := pickHand(game, p, 1, true, f)
-		for i, c := range p.hand {
-			if sel[i] {
-				game.TrashHand(p ,i)
-				choice := pickGainCond(game, game.Cost(c) + 3, f)
-				fmt.Printf("%v puts %v into hand\n", p.name, choice.name)
-				p.hand = append(p.hand, choice)
-				p.discard = p.discard[:len(p.discard)-1]
-				return
-			}
+		selected, p.hand = game.split(p.hand, p, pickOpts{n:1, exact:true, cond:f})
+		if len(selected) == 0 {
+			return
 		}
-		panic("unreachable")
+		choice := pickGainCond(game, game.Cost(selected[0]) + 3, f)
+		fmt.Printf("%v puts %v into hand\n", p.name, choice.name)
+		p.hand = append(p.hand, choice)
+		p.discard = p.discard[:len(p.discard)-1]
 	},
 	"Witch": func(game *Game) {
 		game.attack(func(other *Player) { game.MaybeGain(other, GetCard("Curse")) })
