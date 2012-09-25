@@ -192,7 +192,9 @@ Adventurer,6,Action
 				}
 				return ""
 			}})
-			game.MultiPlay(p, selected[0], 2)
+			if len(selected) > 0 {
+				game.MultiPlay(p, selected[0], 2)
+			}
 		},
 		"Council Room": func(game *Game) {
 			game.ForOthers(func(other *Player) { game.draw(other, 1) })

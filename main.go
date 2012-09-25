@@ -199,21 +199,12 @@ func (game *Game) keyToCard(key byte) *Card {
 }
 
 func (game *Game) MultiPlay(p *Player, c *Card, m int) {
-	var k int
-	for k = len(p.hand) - 1; k >= 0; k-- {
-		if p.hand[k] == c {
-			p.hand = append(p.hand[:k], p.hand[k+1:]...)
-			break
-		}
-	}
-	if k < 0 {
-		panic("unplayable")
-	}
 	p.played = append(p.played, c)
 	if isAction(c) {
 		game.aCount++
 	}
 	for ; m > 0; m-- {
+		fmt.Printf("%v plays %v\n", p.name, c.name)
 		if c.act == nil {
 			fmt.Printf("%v unimplemented  :(\n", c.name)
 			return
@@ -226,14 +217,25 @@ func (game *Game) MultiPlay(p *Player, c *Card, m int) {
 	}
 }
 
-func (game *Game) Play(n int, c *Card) {
+func (game *Game) Play(c *Card) {
+	p := game.NowPlaying()
+	var k int
+	for k = len(p.hand) - 1; k >= 0; k-- {
+		if p.hand[k] == c {
+			p.hand = append(p.hand[:k], p.hand[k+1:]...)
+			break
+		}
+	}
+	if k < 0 {
+		panic("unplayable")
+	}
 	if isAction(c) {
 		game.a--
 	}
-	game.MultiPlay(game.players[n], c, 1)
+	game.MultiPlay(p, c, 1)
 }
 
-func (game *Game) Spend(n int, c *Card) {
+func (game *Game) Spend(c *Card) {
 	game.c -= game.Cost(c)
 	game.b--
 }
@@ -826,9 +828,9 @@ func main() {
 		out: make(chan string),
 	}
 	game.players = []*Player{
-		&Player{name: "Anonymous", fun: ng},
+		//&Player{name: "Anonymous", fun: ng},
 		&Player{name: "Ben", fun: consoleGamer{}},
-		//&Player{name:"AI", fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
+		&Player{name:"AI", fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
 	}
 	players := game.players
 
@@ -993,6 +995,11 @@ func (game *Game) mainloop() {
 				game.Report(Event{s: "phase"})
 				fresh = false
 			}
+			if game.phase == phAction && game.a == 0 || game.phase == phBuy && game.b == 0 || game.phase == phCleanup {
+				game.phase++
+				fresh = true
+				continue
+			}
 			cmd := game.getCommand(p)
 			switch cmd.s {
 			case "buy":
@@ -1001,14 +1008,13 @@ func (game *Game) mainloop() {
 					panic(err)
 				}
 				fmt.Printf("%v buys %v for $%v\n", game.players[game.n].name, choice.name, game.Cost(choice))
-				game.Spend(game.n, choice)
+				game.Spend(choice)
 				game.Gain(p, choice)
 			case "play":
 				if err := game.CanPlay(p, cmd.c); err != "" {
 					panic(err)
 				}
-				fmt.Printf("%v plays %v\n", game.players[game.n].name, cmd.c.name)
-				game.Play(game.n, cmd.c)
+				game.Play(cmd.c)
 			case "next":
 				game.phase++
 				fresh = true
@@ -1085,16 +1091,10 @@ func (consoleGamer) start(game *Game, p *Player) {
 			}
 		case <-p.trigger:
 			game.ch <- func() Command {
-				// Automatically advance to next phase when it's obvious.
 				frame := game.StackTop()
 				if frame == nil {
-					if game.phase == phAction && (game.a == 0 || !p.inHand(isAction)) {
-						return Command{s: "next"}
-					}
-					if game.phase == phBuy && game.b == 0 {
-						return Command{s: "next"}
-					}
-					if game.phase == phCleanup {
+					// Automatically advance to next phase when it's obvious.
+					if game.phase == phAction && !p.inHand(isAction) {
 						return Command{s: "next"}
 					}
 					if game.phase != phBuy {
@@ -1236,17 +1236,11 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 			continue
 		}
 		game.ch <- func() Command {
-			switch game.phase {
-			case phAction:
-				return Command{s: "next"}
-			case phCleanup:
+			if game.phase == phAction {
 				return Command{s: "next"}
 			}
 			if game.phase != phBuy {
 				panic("unreachable")
-			}
-			if game.b == 0 {
-				return Command{s: "next"}
 			}
 			for k := len(p.hand) - 1; k >= 0; k-- {
 				if isTreasure(p.hand[k]) {
@@ -1330,7 +1324,6 @@ func (this netGamer) start(game *Game, p *Player) {
 			default:
 				if !ready {
 					log.Fatal("breach of protocol: " + cmd.s)
-					this.out <- "error: not ready"
 				} else {
 					ready = false
 					game.ch <- cmd
