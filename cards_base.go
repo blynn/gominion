@@ -43,27 +43,22 @@ Adventurer,6,Action
 Fun: map[string]func(game *Game){
 	"Cellar": func(game *Game) {
 		p := game.NowPlaying()
-		selected := pickHand(game, p, len(p.hand), false, nil)
-		count := 0
-		for i := len(p.hand)-1; i >= 0; i-- {
-			if selected[i] {
-				p.discard = append(p.discard, p.hand[i])
-				p.hand = append(p.hand[:i], p.hand[i+1:]...)
-				count++
-			}
-		}
+		var selected Pile
+		selected, p.hand = game.split(p.hand, p, pickOpts{n:len(p.hand)})
+		count := len(selected)
 		if count > 0 {
+			p.discard = append(p.discard, selected...)
 			game.Report(Event{s:"discard", n:p.n, i:count})
 		}
 		game.draw(p, count)
 	},
 	"Chapel": func(game *Game) {
 		p := game.NowPlaying()
-		selected := pickHand(game, p, 4, false, nil)
-		for i := len(p.hand)-1; i >= 0; i-- {
-			if selected[i] {
-				game.TrashHand(p, i)
-			}
+		var selected Pile
+		selected, p.hand = game.split(p.hand, p, pickOpts{n:4})
+		for _, c := range selected {
+			game.trash = append(game.trash, c)
+			game.Report(Event{s:"trash", n:p.n, card:c})
 		}
 	},
 	"Chancellor": func(game *Game) {

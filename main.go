@@ -507,6 +507,69 @@ type pickOpts struct {
 	cond func(*Card) string
 }
 
+func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
+	n := o.n
+	var in, out Pile
+	out = append(list)
+	game.SetParse(func(b byte) (Command, string) {
+		if b == '/' {
+			if o.exact {
+				return errCmd, "must pick a card"
+			}
+			return Command{s:"done"}, ""
+		}
+		choice := game.keyToCard(b)
+		if choice == nil {
+			return errCmd, "unrecognized card"
+		}
+		found := false
+		for _, c := range out {
+			if c == choice {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errCmd, "invalid choice"
+		}
+		if o.cond != nil {
+			if msg := o.cond(choice); msg != "" {
+				return errCmd, msg
+			}
+		}
+		return Command{s:"pick", c:choice}, ""
+	})
+	for stop := false; !stop; {
+		cmd := game.getCommand(p)
+		switch cmd.s {
+			case "pick":
+				found := false
+				for i, c := range out {
+					// nil represents unknown cards.
+					if c == nil || c == cmd.c {
+						in = append(in, c)
+						out = append(out[:i], out[i+1:]...)
+						n--
+						found = true
+						break
+					}
+				}
+				if !found {
+					panic("invalid selection")
+				}
+				stop = n == 0
+			case "done":
+				if o.exact && n > 0 {
+					panic("must pick more")
+				}
+				stop = true
+			default:
+			  panic("bad command: " + cmd.s)
+		}
+	}
+	return in, out
+}
+
 func (game *Game) pick(list []*Card, p *Player, o pickOpts) []bool {
 	n := o.n
 	sel := make([]bool, len(list))
@@ -911,7 +974,7 @@ func main() {
 	}
 	var presets []Preset
 	for _, line := range strings.Split(`
-TEST:Baron,Bridge,Conspirator,Coppersmith,Ironworks,Mining Village,Scout,Courtyard,Great Hall,Duke
+TEST:Chapel,Baron,Bridge,Conspirator,Coppersmith,Ironworks,Mining Village,Scout,Courtyard,Great Hall
 First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
 Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
 Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village
@@ -961,7 +1024,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 	}
 	game.GetDiscard = func(game *Game, p *Player) string {
 		if len(p.discard) == 0 {
-		log.Print("BUG D ", p.name)
+		log.Print("BUG ", p.name)
 		return "BUG!"
 		}
 		return p.discard[len(p.discard)-1].name
