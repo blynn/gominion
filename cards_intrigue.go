@@ -20,37 +20,29 @@ Duke,5,Victory
 Fun: map[string]func(game *Game) {
 	"Courtyard": func(game *Game) {
 		p := game.NowPlaying()
-		if len(p.hand) > 0 {
-			for i, b := range pickHand(game, p, 1, true, nil) {
-				if b {
-					fmt.Printf("%v decks %v\n", p.name, p.hand[i].name)
-					p.hand = append(p.hand[:i], p.hand[i+1:]...)
-					p.deck = append(p.hand[i:i+1], p.deck...)
-					break
-				}
-			}
+		var selected Pile
+		selected, p.hand = game.split(p.hand, p, pickOpts{n:1, exact:true})
+		for _, c := range selected {
+			fmt.Printf("%v decks %v\n", p.name, c.name)
+			p.deck = append(Pile{c}, p.deck...)
 		}
 	},
 	"Baron": func(game *Game) {
 		p := game.NowPlaying()
-
-		p.b++
-		selected := pickHand(game, p, 1, false, func(c *Card) string {
+		var selected Pile
+		selected, p.hand = game.split(p.hand, p, pickOpts{n:1, cond:func(c *Card) string {
 			if c.name != "Estate" {
 				return "must pick Estate"
 			}
 			return ""
-		})
-		for i := len(p.hand)-1; i >= 0; i-- {
-			if selected[i] {
-				p.discard = append(p.discard, p.hand[i])
-				p.hand = append(p.hand[:i], p.hand[i+1:]...)
-				game.Report(Event{s:"discard", n:p.n, i:1})
-				p.c+=4
-				return
-			}
+		}})
+		if len(selected) == 0 {
+			game.MaybeGain(p, GetCard("Estate"))
+		} else {
+			p.c+=4
+			p.discard = append(p.discard, selected[0])
+			game.Report(Event{s:"discard", n:p.n, i:1})
 		}
-		game.MaybeGain(p, GetCard("Estate"))
 	},
 	"Bridge": func(game *Game) { game.discount++ },
 	"Conspirator": func(game *Game) {
@@ -102,14 +94,10 @@ Fun: map[string]func(game *Game) {
 			p.deck = p.deck[1:]
 		}
 		for len(v) > 0 {
-			for i, b := range game.pick(v, p, pickOpts{n:1, exact:true}) {
-				if b {
-					fmt.Printf("%v decks %v\n", p.name, v[i].name)
-					p.deck = append(v[i:i+1], p.deck...)
-					v = append(v[:i], v[i+1:]...)
-					break
-				}
-			}
+			var selected Pile
+			selected, v = game.split(v, p, pickOpts{n:1, exact:true})
+			fmt.Printf("%v decks %v\n", p.name, selected[0].name)
+			p.deck = append(selected, p.deck...)
 		}
 	},
 },

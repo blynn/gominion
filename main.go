@@ -607,78 +607,6 @@ func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 	return in, out
 }
 
-func (game *Game) pick(list Pile, p *Player, o pickOpts) []bool {
-	n := o.n
-	sel := make([]bool, len(list))
-	game.SetParse(func(b byte) (Command, string) {
-		if b == '.' {
-			return Command{s:"done"}, ""
-		}
-		choice := game.keyToCard(b)
-		if choice == nil {
-			return errCmd, "unrecognized card"
-		}
-		if !func() bool {
-			for i, c := range list {
-				if sel[i] {
-					continue
-				}
-				if c == choice {
-					return true
-				}
-			}
-			return false
-		}() {
-			return errCmd, "invalid choice"
-		}
-		if o.cond != nil {
-			if msg := o.cond(choice); msg != "" {
-				return errCmd, msg
-			}
-		}
-		return Command{s:"pick", c:choice}, ""
-	})
-	for stop := false; !stop; {
-		cmd := game.getCommand(p)
-		switch cmd.s {
-			case "pick":
-				found := false
-				for i, c := range list {
-					if sel[i] {
-						continue
-					}
-					// nil represents unknown cards.
-					if c == nil {
-						list[i] = cmd.c
-						c = cmd.c
-					}
-					if c == cmd.c {
-						sel[i] = true
-						n--
-						found = true
-						break
-					}
-				}
-				if !found {
-					panic("invalid selection")
-				}
-				stop = n == 0
-			case "done":
-				if o.exact && n > 0 {
-					panic("must pick more")
-				}
-				stop = true
-			default:
-			  panic("bad command: " + cmd.s)
-		}
-	}
-	return sel
-}
-
-func pickHand(game *Game, p *Player, n int, exact bool, cond func(*Card) string) []bool {
-	return game.pick(p.hand, p, pickOpts{n:n, exact:exact, cond:cond})
-}
-
 func (game *Game) Gain(p *Player, c *Card) {
 	if c.supply == 0 {
 		panic("out of supply")
@@ -760,22 +688,22 @@ func reacts(game *Game, p *Player) bool {
 	if !game.inHand(p, func(c *Card) bool { return c.name == "Moat" }) {
 		return false
 	}
-	sel := pickHand(game, p, 1, false, func(c *Card) string {
+	var selected Pile
+	selected, _ = game.split(p.hand, p, pickOpts{n:1, cond:func(c *Card) string {
 		if c.name != "Moat" {
 			return "pick Moat or nothing"
 		}
 		return ""
-	})
-	for i, c := range p.hand {
-		if sel[i] {
-			if c.name != "Moat" {
-				panic("invalid attack reaction: " + c.name)
-			}
-			fmt.Printf("%v reveals %v\n", p.name, c.name)
-			return true
-		}
+	}})
+	if len(selected) == 0 {
+		return false
 	}
-	return false
+	c := selected[0]
+	if c.name != "Moat" {
+		panic("invalid attack reaction: " + c.name)
+	}
+	fmt.Printf("%v reveals %v\n", p.name, c.name)
+	return true
 }
 
 func (game *Game) ForOthers(fun func(*Player)) {
@@ -1011,7 +939,6 @@ func main() {
 	}
 	var presets []Preset
 	for _, line := range strings.Split(`
-TEST:Mine,Militia,Bridge,Conspirator,Coppersmith,Ironworks,Mining Village,Scout,Courtyard,Great Hall
 First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
 Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
 Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village
@@ -1043,8 +970,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		fmt.Printf("  %v", pr.name)
 	}
 	fmt.Println();
-	//pr := presets[rand.Intn(len(presets))]
-	pr := presets[0]
+	pr := presets[rand.Intn(len(presets))]
 	fmt.Printf("Playing %q\n", pr.name)
 	for i, c := range pr.cards {
 		c.supply = 10
