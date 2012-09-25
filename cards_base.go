@@ -45,12 +45,10 @@ Adventurer,6,Action
 			p := game.NowPlaying()
 			var selected Pile
 			selected, p.hand = game.split(p.hand, p, pickOpts{n: len(p.hand)})
-			count := len(selected)
-			if count > 0 {
-				p.discard = append(p.discard, selected...)
-				game.Report(Event{s: "discard", n: p.n, i: count})
+			if len(selected) > 0 {
+				game.DiscardList(p, selected)
+				game.draw(p, len(selected))
 			}
-			game.draw(p, count)
 		},
 		"Chapel": func(game *Game) {
 			p := game.NowPlaying()
@@ -61,9 +59,8 @@ Adventurer,6,Action
 		"Chancellor": func(game *Game) {
 			p := game.NowPlaying()
 			if len(p.deck) > 0 && game.getBool(p) {
-				i := len(p.deck)
 				p.discard, p.deck = append(p.discard, p.deck...), nil
-				game.Report(Event{s: "discarddeck", n: p.n, i: i})
+				game.Report(Event{s: "discarddeck", n: p.n, i: len(p.deck)})
 			}
 		},
 		"Bureaucrat": func(game *Game) {
@@ -102,10 +99,7 @@ Adventurer,6,Action
 				}
 				var lost Pile
 				other.hand, lost = game.split(other.hand, other, pickOpts{n: 3, exact: true})
-				other.discard = append(other.discard, lost...)
-				if len(lost) > 0 {
-					game.Report(Event{s: "discard", n: other.n, i: len(lost)})
-				}
+				game.DiscardList(other, lost)
 			})
 		},
 		"Moneylender": func(game *Game) {
@@ -139,8 +133,8 @@ Adventurer,6,Action
 			var selected Pile
 			selected, p.hand = game.split(p.hand, p, pickOpts{n: 1, exact: true})
 			if len(selected) > 0 {
+				game.TrashCard(p, selected[0])
 				pickGain(game, game.Cost(selected[0])+2)
-				game.TrashList(p, selected)
 			}
 		},
 		"Spy": func(game *Game) {
@@ -151,9 +145,8 @@ Adventurer,6,Action
 				}
 				c := game.reveal(other)
 				if game.getBool(p) {
-					other.discard = append(other.discard, c)
+					game.DiscardList(other, Pile{c})
 					other.deck = other.deck[1:]
-					game.Report(Event{s: "discard", n: other.n, i: 1})
 				}
 			})
 		},
@@ -180,16 +173,14 @@ Adventurer,6,Action
 					}})
 					junk = append(junk, rest...)
 				}
-				game.TrashList(other, loot)
-				for _, c := range loot {
+				if len(loot) > 0 {
+					c := loot[0]
+					game.TrashCard(other, c)
 					if c.supply > 0 && game.getBool(p) {
 						game.Gain(p, c)
 					}
 				}
-				for _, c := range junk {
-					fmt.Printf("%v discards %v\n", other.name, c.name)
-					other.discard = append(other.discard, c)
-				}
+				game.DiscardList(other, junk)
 			})
 		},
 		"Throne Room": func(game *Game) {
@@ -268,8 +259,7 @@ Adventurer,6,Action
 					p.hand = append(p.hand, c)
 					n--
 				} else {
-					fmt.Printf("%v discards %v\n", p.name, c.name)
-					p.discard = append(p.discard, c)
+					game.DiscardList(p, Pile{c})
 				}
 				p.deck = p.deck[1:]
 			}

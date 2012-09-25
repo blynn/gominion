@@ -40,8 +40,7 @@ Duke,5,Victory
 				game.MaybeGain(p, GetCard("Estate"))
 			} else {
 				game.c += 4
-				p.discard = append(p.discard, selected[0])
-				game.Report(Event{s: "discard", n: p.n, i: 1})
+				game.DiscardList(p, selected)
 			}
 		},
 		"Bridge": func(game *Game) { game.discount++ },

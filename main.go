@@ -123,6 +123,13 @@ func (game *Game) TrashList(p *Player, list Pile) {
 	}
 }
 
+func (game *Game) DiscardList(p *Player, list Pile) {
+	if len(list) > 0 {
+		p.discard = append(p.discard, list...)
+		game.Report(Event{s: "discard", n: p.n, i: len(list)})
+	}
+}
+
 func (game *Game) Cost(c *Card) int {
 	n := c.cost - game.discount
 	if n < 0 {
