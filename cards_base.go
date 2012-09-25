@@ -4,7 +4,8 @@ import (
 	"fmt"
 )
 
-var cardsBase = `
+var cardsBase = CardDB{
+List:`
 Copper,0,Treasure,$1
 Silver,3,Treasure,$2
 Gold,6,Treasure,$3
@@ -38,9 +39,8 @@ Market,5,Action,+C1,+A1,+B1,$1
 Mine,5,Action
 Witch,5,Action-Attack,+C2
 Adventurer,6,Action
-`
-
-var cardsBaseAct = map[string]func(game *Game) {
+`,
+Fun: map[string]func(game *Game){
 	"Cellar": func(game *Game) {
 		p := game.NowPlaying()
 		selected := pickHand(game, p, len(p.hand), false, nil)
@@ -162,7 +162,7 @@ var cardsBaseAct = map[string]func(game *Game) {
 		for i, c := range p.hand {
 			if sel[i] {
 				game.TrashHand(p, i)
-				pickGain(game, c.cost + 2)
+				pickGain(game, game.Cost(c) + 2)
 				return
 			}
 		}
@@ -237,7 +237,6 @@ var cardsBaseAct = map[string]func(game *Game) {
 		})
 		for i, _ := range p.hand {
 			if sel[i] {
-				p.a++  // Compensate for Action deducted by MultiPlay().
 				game.MultiPlay(p.n, p.hand[i], 2)
 				return
 			}
@@ -292,7 +291,7 @@ var cardsBaseAct = map[string]func(game *Game) {
 		for i, c := range p.hand {
 			if sel[i] {
 				game.TrashHand(p ,i)
-				choice := pickGainCond(game, c.cost + 3, f)
+				choice := pickGainCond(game, game.Cost(c) + 3, f)
 				fmt.Printf("%v puts %v into hand\n", p.name, choice.name)
 				p.hand = append(p.hand, choice)
 				p.discard = p.discard[:len(p.discard)-1]
@@ -319,4 +318,8 @@ var cardsBaseAct = map[string]func(game *Game) {
 			p.deck = p.deck[1:]
 		}
 	},
+},
+VP: map[string]func(game *Game) int {
+	"Gardens": func(game *Game) int { return len(game.NowPlaying().manifest) / 10 },
+},
 }

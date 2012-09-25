@@ -97,6 +97,8 @@ type Game struct {
 	isServer bool
 	fetch func() []string
 	GetDiscard func (game *Game, p *Player) string
+	discount int
+	copperbonus int
 }
 
 const (
@@ -105,10 +107,18 @@ const (
 	phCleanup
 )
 
+func (game *Game) Cost(c *Card) int {
+	n := c.cost - game.discount
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
 func (game *Game) dump() {
 	cols := []int {3,3,1,3,3,3,1}
 	for _, c := range game.suplist {
-		fmt.Printf("  [%c] %v(%v) $%v", c.key, c.name, c.supply, c.cost)
+		fmt.Printf("  [%c] %v(%v) $%v", c.key, c.name, c.supply, game.Cost(c))
 		cols[0]--
 		if cols[0] == 0 {
 			fmt.Println()
@@ -185,7 +195,7 @@ func (game *Game) MultiPlay(n int, c *Card, m int) {
 	}
 	p.played = append(p.played, c)
 	if isAction(c) {
-		p.a--
+		p.aCount++
 	}
 	for ;m > 0; m-- {
 		if c.act == nil {
@@ -201,12 +211,15 @@ func (game *Game) MultiPlay(n int, c *Card, m int) {
 }
 
 func (game *Game) Play(n int, c *Card) {
+	if isAction(c) {
+		game.NowPlaying().a--
+	}
 	game.MultiPlay(n, c, 1)
 }
 
 func (game *Game) Spend(n int, c *Card) {
 	p := game.players[n]
-	p.c -= c.cost
+	p.c -= game.Cost(c)
 	p.b--
 }
 
@@ -264,7 +277,7 @@ type PlayFun interface {
 type Player struct {
 	name string
 	fun PlayFun
-	a, b, c int
+	a, b, c, aCount int  // TODO: Move to Game.
 	manifest, deck, hand, played, discard Pile
 	n int
 	trigger chan bool  // When triggered, Player sends a Command on game.ch.
@@ -435,7 +448,7 @@ func CanBuy(game *Game, c *Card) string {
 			return "wrong phase"
 		case p.b == 0:
 			return "no buys left"
-		case c.cost > p.c:
+		case game.Cost(c) > p.c:
 			return "insufficient money"
 		case c.supply == 0:
 			return "supply exhausted"
@@ -589,7 +602,7 @@ func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 		if c == nil {
 			return errCmd, "expected card"
 		}
-		if c.cost > max {
+		if game.Cost(c) > max {
 			return errCmd, "too expensive"
 		}
 		if c.supply == 0 {
@@ -607,15 +620,15 @@ func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 	if cmd.s != "pick" {
 		panic("bad command: " + cmd.s)
 	}
-	if cmd.c.cost > max {
+	if game.Cost(cmd.c) > max {
 		panic("too expensive")
 	}
 	game.Gain(p, cmd.c)
 	return cmd.c
 }
 
-func pickGain(game *Game, max int) {
-	pickGainCond(game, max, nil)
+func pickGain(game *Game, max int) *Card {
+	return pickGainCond(game, max, nil)
 }
 
 var errCmd Command
@@ -704,16 +717,14 @@ func (game *Game) getBool(p *Player) bool {
 	panic("bad command: " + cmd.s)
 }
 
-func main() {
-	log.SetFlags(log.Lshortfile)
-	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
-		KindDict[s] = &Kind{s}
-	}
-	kTreasure = getKind("Treasure")
-	kVictory = getKind("Victory")
-	kCurse = getKind("Curse")
-	kAction = getKind("Action")
-	for _, s := range strings.Split(cardsBase + cardsIntrigue, "\n") {
+type CardDB struct {
+	List string
+	Fun map[string]func(game *Game)
+	VP map[string]func(game *Game) int
+}
+
+func loadDB(db CardDB) {
+	for _, s := range strings.Split(db.List, "\n") {
 		if len(s) == 0 {
 			continue
 		}
@@ -762,17 +773,27 @@ func main() {
 				panic(s)
 			}
 		}
-		if fun, ok := cardsBaseAct[c.name]; ok {
+		if fun, ok := db.Fun[c.name]; ok {
 			add(fun)
 		}
-		if fun, ok := cardsIntrigueAct[c.name]; ok {
-			add(fun)
-		}
-		if c.name == "Gardens" {
-		  c.vp = func(game *Game) int { return len(game.NowPlaying().deck) / 10 }
+		if fun, ok := db.VP[c.name]; ok {
+		  c.vp = fun
 		}
 	}
+}
 
+func main() {
+	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
+		KindDict[s] = &Kind{s}
+	}
+	kTreasure = getKind("Treasure")
+	kVictory = getKind("Victory")
+	kCurse = getKind("Curse")
+	kAction = getKind("Action")
+	loadDB(cardsBase)
+	loadDB(cardsIntrigue)
+
+	log.SetFlags(log.Lshortfile)
 	flag.Parse()
 	if flag.NArg() > 0 {
 		client(flag.Arg(0))
@@ -890,7 +911,7 @@ func main() {
 	}
 	var presets []Preset
 	for _, line := range strings.Split(`
-Baron Game:Baron,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
+TEST:Baron,Bridge,Conspirator,Coppersmith,Ironworks,Mining Village,Scout,Courtyard,Great Hall,Duke
 First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
 Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
 Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village
@@ -953,6 +974,9 @@ func (game *Game) mainloop() {
 		p := game.NowPlaying()
 		p.a, p.b, p.c = 1, 1, 0
 		fresh := true
+		game.discount = 0
+		game.copperbonus = 0
+		p.aCount = 0
 		for game.phase = phAction; game.phase <= phCleanup; {
 			if fresh {
 				game.Report(Event{s:"phase"})
@@ -965,7 +989,7 @@ func (game *Game) mainloop() {
 					if err := CanBuy(game, choice); err != "" {
 						panic(err)
 					}
-fmt.Printf("%v buys %v for $%v\n", game.players[game.n].name, choice.name, choice.cost)
+fmt.Printf("%v buys %v for $%v\n", game.players[game.n].name, choice.name, game.Cost(choice))
 					game.Spend(game.n, choice)
 					game.Gain(p, choice)
 				case "play":
@@ -1217,7 +1241,7 @@ func (this simpleBuyer) start(game *Game, p *Player) {
 			}
 			for _, s := range this.list {
 				c := GetCard(s)
-				if p.c >= c.cost {
+				if p.c >= game.Cost(c) {
 					return Command{s:"buy", c:c}
 				}
 			}
