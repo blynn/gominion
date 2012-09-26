@@ -135,11 +135,7 @@ func (game *Game) DiscardList(p *Player, list Pile) {
 }
 
 func (game *Game) LeftOf(p *Player) *Player {
-	n := p.n
-	if n == 0 {
-		n = len(game.players)
-	}
-	return game.players[n-1]
+	return game.players[(p.n + 1) % len(game.players)]
 }
 
 func (game *Game) Cost(c *Card) int {

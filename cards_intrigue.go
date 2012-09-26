@@ -75,11 +75,7 @@ Nobles,6,Action-Victory,#2
 				}
 			}
 			for i := 0; i < m; i++ {
-				j := i
-				if j == 0 {
-					j = m
-				}
-				j--
+				j := (i+1) % m
 				left := game.players[j]
 				left.hand = append(left.hand, a[i])
 				// TODO: Report the gained card.
