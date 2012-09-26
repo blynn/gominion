@@ -7,7 +7,10 @@ import (
 var cardsIntrigue = CardDB{
 	List: `
 Courtyard,2,Action,+C3
+Pawn,2,Action
 Great Hall,3,Action-Victory,+C1,+A1,#1
+Shanty Town,3,Action,+A2
+Steward,3,Action
 Baron,4,Action,+B1
 Bridge,4,Action,+B1,$1
 Conspirator,4,Action,$2
@@ -16,21 +19,57 @@ Ironworks,4,Action
 Mining Village,4,Action,+C1,+A2
 Scout,4,Action,+A1
 Duke,5,Victory
+Minion,5,Action-Attack,+A1
+Harem,6,Treasure-Victory,$2,#2
+Nobles,6,Action-Victory,#2
 `,
 	Fun: map[string]func(game *Game){
 		"Courtyard": func(game *Game) {
 			p := game.NowPlaying()
-			var selected Pile
-			selected, p.hand = game.split(p.hand, p, pickOpts{n: 1, exact: true})
-			for _, c := range selected {
+			for _, c := range game.pickHand(p, pickOpts{n: 1, exact: true}) {
 				fmt.Printf("%v decks %v\n", p.name, c.name)
 				p.deck = append(Pile{c}, p.deck...)
 			}
 		},
+		"Pawn": func(game *Game) {
+			v := game.getInts(game.NowPlaying(), "+1 Card; +1 Action; +1 Buy; +$1", 2)
+			for _, i := range v {
+				switch i-1 {
+				case 0:
+					game.addCards(1)
+				case 1:
+					game.a++
+				case 2:
+					game.b++
+				case 3:
+					game.c++
+				}
+			}
+		},
+		"Shanty Town": func(game *Game) {
+			p := game.NowPlaying()
+			game.revealHand(p)
+			if !game.inHand(p, isAction) {
+				game.addCards(2)
+			}
+		},
+		"Steward": func(game *Game) {
+			v := game.getInts(game.NowPlaying(), "+2 Cards; +$2; trash 2 from hand", 1)
+			for _, i := range v {
+				switch i-1 {
+				case 0:
+					game.addCards(2)
+				case 1:
+					game.c += 2
+				case 2:
+					p := game.NowPlaying()
+					game.TrashList(p, game.pickHand(p, pickOpts{n: 2, exact:true}))
+				}
+			}
+		},
 		"Baron": func(game *Game) {
 			p := game.NowPlaying()
-			var selected Pile
-			selected, p.hand = game.split(p.hand, p, pickOpts{n: 1, cond: func(c *Card) string {
+			selected := game.pickHand(p, pickOpts{n: 1, cond: func(c *Card) string {
 				if c.name != "Estate" {
 					return "must pick Estate"
 				}
@@ -94,6 +133,38 @@ Duke,5,Victory
 				selected, v = game.split(v, p, pickOpts{n: 1, exact: true})
 				fmt.Printf("%v decks %v\n", p.name, selected[0].name)
 				p.deck = append(selected, p.deck...)
+			}
+		},
+		"Minion": func(game *Game) {
+			v := game.getInts(game.NowPlaying(), "+$2; discard hand, +4 Cards", 1)
+			for _, i := range v {
+				switch i-1 {
+				case 0:
+					game.c += 2
+				case 1:
+					p := game.NowPlaying()
+					game.DiscardList(p, p.hand)
+					p.hand = nil
+					game.addCards(4)
+					game.attack(func(other *Player) {
+						if len(other.hand) >= 5 {
+							game.DiscardList(other, other.hand)
+							other.hand = nil
+							game.draw(other, 4)
+						}
+					})
+				}
+			}
+		},
+		"Nobles": func(game *Game) {
+			v := game.getInts(game.NowPlaying(), "+3 Cards; +2 Actions", 1)
+			for _, i := range v {
+				switch i-1 {
+				case 0:
+					game.addCards(3)
+				case 1:
+					game.a += 2
+				}
 			}
 		},
 	},

@@ -43,8 +43,7 @@ Adventurer,6,Action
 	Fun: map[string]func(game *Game){
 		"Cellar": func(game *Game) {
 			p := game.NowPlaying()
-			var selected Pile
-			selected, p.hand = game.split(p.hand, p, pickOpts{n: len(p.hand)})
+			selected := game.pickHand(p, pickOpts{n: len(p.hand)})
 			if len(selected) > 0 {
 				game.DiscardList(p, selected)
 				game.draw(p, len(selected))
@@ -52,9 +51,7 @@ Adventurer,6,Action
 		},
 		"Chapel": func(game *Game) {
 			p := game.NowPlaying()
-			var selected Pile
-			selected, p.hand = game.split(p.hand, p, pickOpts{n: 4})
-			game.TrashList(p, selected)
+			game.TrashList(p, game.pickHand(p, pickOpts{n: 4}))
 		},
 		"Chancellor": func(game *Game) {
 			p := game.NowPlaying()
@@ -71,8 +68,7 @@ Adventurer,6,Action
 				p.discard = p.discard[:n-1]
 			}
 			game.attack(func(other *Player) {
-				var selected Pile
-				selected, other.hand = game.split(other.hand, other, pickOpts{n: 1, exact: true, cond: func(c *Card) string {
+				selected := game.pickHand(other, pickOpts{n: 1, exact: true, cond: func(c *Card) string {
 					if !isVictory(c) {
 						return "must pick Victory card"
 					}
@@ -130,8 +126,7 @@ Adventurer,6,Action
 		},
 		"Remodel": func(game *Game) {
 			p := game.NowPlaying()
-			var selected Pile
-			selected, p.hand = game.split(p.hand, p, pickOpts{n: 1, exact: true})
+			selected := game.pickHand(p, pickOpts{n: 1, exact: true})
 			if len(selected) > 0 {
 				game.TrashCard(p, selected[0])
 				pickGain(game, game.Cost(selected[0])+2)
@@ -185,8 +180,7 @@ Adventurer,6,Action
 		},
 		"Throne Room": func(game *Game) {
 			p := game.NowPlaying()
-			var selected Pile
-			selected, p.hand = game.split(p.hand, p, pickOpts{n: 1, exact: true, cond: func(c *Card) string {
+			selected := game.pickHand(p, pickOpts{n: 1, exact: true, cond: func(c *Card) string {
 				if !isAction(c) {
 					return "must pick Action"
 				}
@@ -232,14 +226,13 @@ Adventurer,6,Action
 		},
 		"Mine": func(game *Game) {
 			p := game.NowPlaying()
-			var selected Pile
 			f := func(c *Card) string {
 				if !isTreasure(c) {
 					return "must pick Treasure"
 				}
 				return ""
 			}
-			selected, p.hand = game.split(p.hand, p, pickOpts{n: 1, exact: true, cond: f})
+			selected := game.pickHand(p, pickOpts{n: 1, exact: true, cond: f})
 			if len(selected) == 0 {
 				return
 			}

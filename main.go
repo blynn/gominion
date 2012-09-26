@@ -126,6 +126,8 @@ func (game *Game) TrashList(p *Player, list Pile) {
 func (game *Game) DiscardList(p *Player, list Pile) {
 	if len(list) > 0 {
 		p.discard = append(p.discard, list...)
+		// TODO: Race condition: what if player shuffles discards into deck
+		// while another is trying look at the top discard?
 		game.Report(Event{s: "discard", n: p.n, i: len(list)})
 	}
 }
@@ -362,13 +364,15 @@ func (game *Game) reveal(p *Player) *Card {
 }
 
 func (game *Game) revealHand(p *Player) {
-	for _, c := range p.hand {
+	for i, c := range p.hand {
 		if game.isServer {
-			fmt.Printf("%v reveals %v\n", p.name, c.name)
-			game.cast("reveal", c)
+			game.cast("revealHand", c)
 		} else {
-			fmt.Printf("%v reveals %v\n", p.name, game.keyToCard(game.fetch()[0][0]).name)
+			p.hand[i] = game.keyToCard(game.fetch()[0][0])
 		}
+	}
+	for _, c := range p.hand {
+		fmt.Printf("%v reveals %v\n", p.name, c.name)
 	}
 }
 
@@ -502,6 +506,12 @@ type pickOpts struct {
 	n     int
 	exact bool
 	cond  func(*Card) string
+}
+
+func (game *Game) pickHand(p *Player, o pickOpts) Pile {
+	var selected Pile
+	selected, p.hand = game.split(p.hand, p, o)
+	return selected
 }
 
 func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
@@ -707,6 +717,33 @@ func (game *Game) attack(fun func(*Player)) {
 		}
 		fun(other)
 	}
+}
+
+func (game *Game) getInts(p *Player, menu string, n int) []int {
+	v := strings.Split(menu, ";")
+	for i, s := range v {
+		v[i] = strings.TrimSpace(s)
+		fmt.Printf("[%d] %v\n", i+1, v[i])
+	}
+	var selection []int
+	game.SetParse(func(b byte) (Command, string) {
+		if b < '1' || b > '0' + byte(len(v)) {
+			i := int(b - '0')
+			log.Printf("%d", i)
+			for _, x := range selection {
+				if x == i {
+					return errCmd, "already chosen " + string(b)
+				}
+			}
+			return errCmd, "enter digit within range"
+		}
+		return Command{s: string(b)}, ""
+	})
+	for len(selection) < n {
+		cmd := game.getCommand(p)
+		selection = append(selection, int(cmd.s[0] - '0'))
+	}
+	return selection
 }
 
 func (game *Game) getBool(p *Player) bool {
@@ -926,6 +963,7 @@ func main() {
 	}
 	var presets []Preset
 	for _, line := range strings.Split(`
+TEST:Courtyard,Pawn,Shanty Town,Steward,Minion,Harem,Nobles,Village,Woodcutter,Workshop
 First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
 Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
 Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village
@@ -957,7 +995,8 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		fmt.Printf("  %v", pr.name)
 	}
 	fmt.Println()
-	pr := presets[rand.Intn(len(presets))]
+	//pr := presets[rand.Intn(len(presets))]
+	pr := presets[0]
 	fmt.Printf("Playing %q\n", pr.name)
 	for i, c := range pr.cards {
 		c.supply = 10
