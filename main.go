@@ -53,12 +53,14 @@ type Pile []*Card
 var (
 	KindDict                             = make(map[string]*Kind)
 	CardDict                             = make(map[string]*Card)
-	kTreasure, kVictory, kCurse, kAction *Kind
 )
+
+var kTreasure, kVictory, kCurse, kAction, kReaction *Kind
 
 func isVictory(c *Card) bool  { return c.HasKind(kVictory) }
 func isTreasure(c *Card) bool { return c.HasKind(kTreasure) }
 func isAction(c *Card) bool   { return c.HasKind(kAction) }
+func isReaction(c *Card) bool { return c.HasKind(kReaction) }
 
 func GetCard(s string) *Card {
 	c, ok := CardDict[s]
@@ -621,32 +623,66 @@ func (game *Game) MaybeGain(p *Player, c *Card) bool {
 	return true
 }
 
-func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
-	game.SetParse(func(b byte) (Command, string) {
-		c := game.keyToCard(b)
-		switch {
-		case c == nil:
-			return errCmd, "expected card"
-		case game.Cost(c) > max:
-			return errCmd, "too expensive"
-		case c.supply == 0:
-			return errCmd, "supply exhausted"
-		case fun != nil:
-			if msg := fun(c); msg != "" {
-				return errCmd, msg
+type CardOpts struct {
+	cost int
+	exact bool
+	cond func(*Card) string
+	any bool  // Overrides the above options.
+	optional bool
+}
+
+func pickCard(game *Game, p *Player, o CardOpts) *Card {
+	// TODO: Return nil if impossible.
+	isValid := func(c *Card) string {
+		if c == nil {
+			if o.optional {
+				return ""
 			}
+			return "must pick card"
+		} else if o.any {
+			return ""
+		}
+		switch {
+		case game.Cost(c) > o.cost:
+			return "too expensive"
+		case o.exact && game.Cost(c) < o.cost:
+			return "too cheap"
+		case c.supply == 0:
+			return "supply exhausted"
+		case o.cond != nil:
+			if msg := o.cond(c); msg != "" {
+				return msg
+			}
+		}
+		return ""
+	}
+	game.SetParse(func(b byte) (Command, string) {
+		var c *Card
+		if b != '.' {
+			c = game.keyToCard(b)
+			if c == nil {
+				return errCmd, "no such card"
+			}
+		}
+		if msg := isValid(c); msg != "" {
+			return errCmd, msg
 		}
 		return Command{s: "pick", c: c}, ""
 	})
-	cmd := game.getCommand(game.p)
+	cmd := game.getCommand(p)
 	if cmd.s != "pick" {
 		panic("bad command: " + cmd.s)
 	}
-	if game.Cost(cmd.c) > max {
-		panic("too expensive")
+	if msg := isValid(cmd.c); msg != "" {
+		panic(msg)
 	}
-	game.Gain(game.p, cmd.c)
 	return cmd.c
+}
+
+func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
+	c := pickCard(game, game.p, CardOpts{cost:max, cond:fun})
+	game.Gain(game.p, c)
+	return c
 }
 
 func pickGain(game *Game, max int) *Card { return pickGainCond(game, max, nil) }
@@ -677,13 +713,13 @@ func (game *Game) inHand(p *Player, cond func(*Card) bool) bool {
 }
 
 func reacts(game *Game, p *Player) bool {
-	if !game.inHand(p, func(c *Card) bool { return c.name == "Moat" }) {
+	if !game.inHand(p, isReaction) {
 		return false
 	}
 	var selected Pile
 	selected, _ = game.split(p.hand, p, pickOpts{n: 1, cond: func(c *Card) string {
-		if c.name != "Moat" {
-			return "pick Moat or nothing"
+		if !isReaction(c) {
+			return "pick Reaction"
 		}
 		return ""
 	}})
@@ -691,11 +727,19 @@ func reacts(game *Game, p *Player) bool {
 		return false
 	}
 	c := selected[0]
-	if c.name != "Moat" {
-		panic("invalid attack reaction: " + c.name)
-	}
 	fmt.Printf("%v reveals %v\n", p.name, c.name)
-	return true
+	switch c.name {
+	case "Moat":
+		return true
+	case "Secret Chamber":
+		game.draw(p, 2)
+		selected := game.pickHand(p, pickOpts{n: 2, exact: true})
+		fmt.Printf("%v decks %v cards\n", p.name, len(selected))
+		p.deck = append(selected, p.deck...)
+		return false
+	}
+	log.Print("unimplemented :(")
+	return false
 }
 
 func (game *Game) ForOthers(fun func(*Player)) {
@@ -835,6 +879,7 @@ func main() {
 	kVictory = getKind("Victory")
 	kCurse = getKind("Curse")
 	kAction = getKind("Action")
+	kReaction = getKind("Reaction")
 	loadDB(cardsBase)
 	loadDB(cardsIntrigue)
 
@@ -959,7 +1004,7 @@ func main() {
 	}
 	var presets []Preset
 	for _, line := range strings.Split(`
-TEST:Courtyard,Pawn,Shanty Town,Steward,Minion,Harem,Nobles,Village,Woodcutter,Witch
+TEST:Courtyard,Pawn,Shanty Town,Steward,Swindler,Secret Chamber,Nobles,Upgrade,Trading Post,Saboteur
 First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
 Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
 Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village

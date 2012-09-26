@@ -8,9 +8,12 @@ var cardsIntrigue = CardDB{
 	List: `
 Courtyard,2,Action,+C3
 Pawn,2,Action
+Secret Chamber,2,Action-Reaction
 Great Hall,3,Action-Victory,+C1,+A1,#1
 Shanty Town,3,Action,+A2
 Steward,3,Action
+Swindler,3,Action-Attack,$2
+Wishing Well,3,Action,+C1,+A1
 Baron,4,Action,+B1
 Bridge,4,Action,+B1,$1
 Conspirator,4,Action,$2
@@ -20,6 +23,9 @@ Mining Village,4,Action,+C1,+A2
 Scout,4,Action,+A1
 Duke,5,Victory
 Minion,5,Action-Attack,+A1
+Saboteur,5,Action-Attack
+Trading Post,5,Action
+Upgrade,5,Action,+C1,+A1
 Harem,6,Treasure-Victory,$2,#2
 Nobles,6,Action-Victory,#2
 `,
@@ -46,6 +52,14 @@ Nobles,6,Action-Victory,#2
 				}
 			}
 		},
+		"Secret Chamber": func(game *Game) {
+			p := game.p
+			selected := game.pickHand(p, pickOpts{n: len(p.hand)})
+			if len(selected) > 0 {
+				game.DiscardList(p, selected)
+				game.c += len(selected)
+			}
+		},
 		"Shanty Town": func(game *Game) {
 			game.revealHand(game.p)
 			if !game.inHand(game.p, isAction) {
@@ -63,6 +77,24 @@ Nobles,6,Action-Victory,#2
 				case 2:
 					game.TrashList(game.p, game.pickHand(game.p, pickOpts{n: 2, exact:true}))
 				}
+			}
+		},
+		"Swindler": func(game *Game) {
+			game.attack(func(other *Player) {
+				c := game.reveal(other)
+				other.deck = other.deck[1:]
+				game.TrashCard(other, c)
+				sub := pickCard(game, game.p, CardOpts{cost:game.Cost(c), exact:true})
+				game.Gain(other, sub)
+			})
+		},
+		"Wishing Well": func(game *Game) {
+			p := game.p
+			c := pickCard(game, p, CardOpts{any:true})
+			if c == game.reveal(p) {
+				fmt.Printf("%v puts %v in hand\n", p.name, c.name)
+				p.hand = append(p.hand, c)
+				p.deck = p.deck[1:]
 			}
 		},
 		"Baron": func(game *Game) {
@@ -152,6 +184,50 @@ Nobles,6,Action-Victory,#2
 					})
 				}
 			}
+		},
+		"Saboteur": func(game *Game) {
+			game.attack(func(other *Player) {
+				var v Pile
+				var c *Card
+				for {
+					c = game.reveal(other)
+					other.deck = other.deck[1:]
+					if c == nil || game.Cost(c) >= 3 {
+						break
+					}
+					v = append(v, c)
+				}
+				if c != nil {
+					game.TrashCard(other, c)
+					sub := pickCard(game, other, CardOpts{cost:game.Cost(c)-2, optional:true})
+					if sub != nil {
+						game.Gain(other, sub)
+					}
+				}
+				if len(v) > 0 {
+					game.DiscardList(other, v)
+				}
+			})
+		},
+		"Trading Post": func(game *Game) {
+			p := game.p
+			selected := game.pickHand(p, pickOpts{n: 2, exact: true})
+			game.TrashList(p, selected)
+			if len(selected) == 2 && game.MaybeGain(p, GetCard("Silver")) {
+				n := len(p.discard)
+				p.hand = append(p.hand, p.discard[n-1])
+				p.discard = p.discard[:n-1]
+			}
+		},
+		"Upgrade": func(game *Game) {
+			p := game.p
+			selected := game.pickHand(p, pickOpts{n: 1, exact: true})
+			if len(selected) == 0 {
+				return
+			}
+			game.TrashCard(p, selected[0])
+			c := pickCard(game, p, CardOpts{cost:game.Cost(selected[0])+1, exact:true})
+			game.Gain(p, c)
 		},
 		"Nobles": func(game *Game) {
 			v := game.getInts(game.p, "+3 Cards; +2 Actions", 1)

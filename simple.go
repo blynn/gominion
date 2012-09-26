@@ -24,6 +24,10 @@ func (this SimpleBuyer) start(game *Game, p *Player) {
 					game.ch <- Command{s: "pick", c: p.hand[i]}
 					<-p.trigger
 				}
+			case "Saboteur":
+				// TODO: Better Saboteur strategy.
+				game.ch <- Command{s: "pick"}  // Pick nothing!
+				continue
 			default:
 				panic("AI unimplemented: " + frame.card.name)
 			}
