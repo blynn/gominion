@@ -25,14 +25,14 @@ Nobles,6,Action-Victory,#2
 `,
 	Fun: map[string]func(game *Game){
 		"Courtyard": func(game *Game) {
-			p := game.NowPlaying()
+			p := game.p
 			for _, c := range game.pickHand(p, pickOpts{n: 1, exact: true}) {
 				fmt.Printf("%v decks %v\n", p.name, c.name)
 				p.deck = append(Pile{c}, p.deck...)
 			}
 		},
 		"Pawn": func(game *Game) {
-			v := game.getInts(game.NowPlaying(), "+1 Card; +1 Action; +1 Buy; +$1", 2)
+			v := game.getInts(game.p, "+1 Card; +1 Action; +1 Buy; +$1", 2)
 			for _, i := range v {
 				switch i-1 {
 				case 0:
@@ -47,14 +47,13 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Shanty Town": func(game *Game) {
-			p := game.NowPlaying()
-			game.revealHand(p)
-			if !game.inHand(p, isAction) {
+			game.revealHand(game.p)
+			if !game.inHand(game.p, isAction) {
 				game.addCards(2)
 			}
 		},
 		"Steward": func(game *Game) {
-			v := game.getInts(game.NowPlaying(), "+2 Cards; +$2; trash 2 from hand", 1)
+			v := game.getInts(game.p, "+2 Cards; +$2; trash 2 from hand", 1)
 			for _, i := range v {
 				switch i-1 {
 				case 0:
@@ -62,24 +61,22 @@ Nobles,6,Action-Victory,#2
 				case 1:
 					game.c += 2
 				case 2:
-					p := game.NowPlaying()
-					game.TrashList(p, game.pickHand(p, pickOpts{n: 2, exact:true}))
+					game.TrashList(game.p, game.pickHand(game.p, pickOpts{n: 2, exact:true}))
 				}
 			}
 		},
 		"Baron": func(game *Game) {
-			p := game.NowPlaying()
-			selected := game.pickHand(p, pickOpts{n: 1, cond: func(c *Card) string {
+			selected := game.pickHand(game.p, pickOpts{n: 1, cond: func(c *Card) string {
 				if c.name != "Estate" {
 					return "must pick Estate"
 				}
 				return ""
 			}})
 			if len(selected) == 0 {
-				game.MaybeGain(p, GetCard("Estate"))
+				game.MaybeGain(game.p, GetCard("Estate"))
 			} else {
 				game.c += 4
-				game.DiscardList(p, selected)
+				game.DiscardList(game.p, selected)
 			}
 		},
 		"Bridge": func(game *Game) { game.discount++ },
@@ -108,7 +105,7 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Mining Village": func(game *Game) {
-			p := game.NowPlaying()
+			p := game.p
 			if game.getBool(p) {
 				game.trash = append(game.trash, p.played[len(p.played)-1])
 				p.played = p.played[:len(p.played)-1]
@@ -116,7 +113,7 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Scout": func(game *Game) {
-			p := game.NowPlaying()
+			p := game.p
 			var v Pile
 			for n := 0; n < 4 && p.MaybeShuffle(); n++ {
 				c := game.reveal(p)
@@ -136,13 +133,13 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Minion": func(game *Game) {
-			v := game.getInts(game.NowPlaying(), "+$2; discard hand, +4 Cards", 1)
+			v := game.getInts(game.p, "+$2; discard hand, +4 Cards", 1)
 			for _, i := range v {
 				switch i-1 {
 				case 0:
 					game.c += 2
 				case 1:
-					p := game.NowPlaying()
+					p := game.p
 					game.DiscardList(p, p.hand)
 					p.hand = nil
 					game.addCards(4)
@@ -157,7 +154,7 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Nobles": func(game *Game) {
-			v := game.getInts(game.NowPlaying(), "+3 Cards; +2 Actions", 1)
+			v := game.getInts(game.p, "+3 Cards; +2 Actions", 1)
 			for _, i := range v {
 				switch i-1 {
 				case 0:
@@ -171,7 +168,7 @@ Nobles,6,Action-Victory,#2
 	VP: map[string]func(game *Game) int{
 		"Duke": func(game *Game) int {
 			n := 0
-			for _, c := range game.NowPlaying().manifest {
+			for _, c := range game.p.manifest {
 				if c.name == "Duchy" {
 					n++
 				}

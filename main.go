@@ -87,7 +87,7 @@ func (deck *Pile) Add(s string) {
 
 type Game struct {
 	players    []*Player
-	n          int // Index of current player.
+	p          *Player // Current player.
 	a, b, c    int // Actions, Buys, Coins,
 	suplist    Pile
 	ch         chan Command
@@ -220,7 +220,7 @@ func (game *Game) MultiPlay(p *Player, c *Card, m int) {
 }
 
 func (game *Game) Play(c *Card) {
-	p := game.NowPlaying()
+	p := game.p
 	var k int
 	for k = len(p.hand) - 1; k >= 0; k-- {
 		if p.hand[k] == c {
@@ -242,11 +242,10 @@ func (game *Game) Spend(c *Card) {
 	game.b--
 }
 
-func (game *Game) NowPlaying() *Player { return game.players[game.n] }
 func (game *Game) addCoins(n int)      { game.c += n }
 func (game *Game) addActions(n int)    { game.a += n }
 func (game *Game) addBuys(n int)       { game.b += n }
-func (game *Game) addCards(n int)      { game.draw(game.NowPlaying(), n) }
+func (game *Game) addCards(n int)      { game.draw(game.p, n) }
 
 func (game *Game) SetParse(fun func(b byte) (Command, string)) {
 	game.stack[len(game.stack)-1].Parse = fun
@@ -459,8 +458,8 @@ func CanBuy(game *Game, c *Card) string {
 
 func (game *Game) Over() {
 	fmt.Printf("Game over\n")
-	for i, p := range game.players {
-		game.n = i // We want NowPlaying() for some VP computations.
+	for _, p := range game.players {
+		game.p = p // Require current player for some VP computations.
 		score := 0
 		m := make(map[*Card]struct {
 			count, pts int
@@ -639,15 +638,14 @@ func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 		}
 		return Command{s: "pick", c: c}, ""
 	})
-	p := game.NowPlaying()
-	cmd := game.getCommand(p)
+	cmd := game.getCommand(game.p)
 	if cmd.s != "pick" {
 		panic("bad command: " + cmd.s)
 	}
 	if game.Cost(cmd.c) > max {
 		panic("too expensive")
 	}
-	game.Gain(p, cmd.c)
+	game.Gain(game.p, cmd.c)
 	return cmd.c
 }
 
@@ -702,21 +700,19 @@ func reacts(game *Game, p *Player) bool {
 
 func (game *Game) ForOthers(fun func(*Player)) {
 	m := len(game.players)
-	for i := (game.n + 1) % m; i != game.n; i = (i + 1) % m {
+	for i := (game.p.n + 1) % m; i != game.p.n; i = (i + 1) % m {
 		fun(game.players[i])
 	}
 }
 
 func (game *Game) attack(fun func(*Player)) {
-	m := len(game.players)
-	for i := (game.n + 1) % m; i != game.n; i = (i + 1) % m {
-		other := game.players[i]
-		fmt.Printf("%v attacks %v\n", game.NowPlaying().name, other.name)
+	game.ForOthers(func(other *Player) {
+		fmt.Printf("%v attacks %v\n", game.p.name, other.name)
 		if reacts(game, other) {
-			continue
+			return
 		}
 		fun(other)
-	}
+	})
 }
 
 func (game *Game) getInts(p *Player, menu string, n int) []int {
@@ -963,7 +959,7 @@ func main() {
 	}
 	var presets []Preset
 	for _, line := range strings.Split(`
-TEST:Courtyard,Pawn,Shanty Town,Steward,Minion,Harem,Nobles,Village,Woodcutter,Workshop
+TEST:Courtyard,Pawn,Shanty Town,Steward,Minion,Harem,Nobles,Village,Woodcutter,Witch
 First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
 Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
 Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village
@@ -1022,12 +1018,13 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 }
 
 func (game *Game) mainloop() {
-	for game.n = 0; ; game.n = (game.n + 1) % len(game.players) {
+	for i := 0; ; i = (i + 1) % len(game.players) {
+		game.p = game.players[i]
 		game.a, game.b, game.c = 1, 1, 0
 		game.discount = 0
 		game.copperbonus = 0
 		game.aCount = 0
-		p := game.NowPlaying()
+		p := game.p
 		prev := phCleanup
 		for game.phase = phAction; game.phase <= phCleanup; {
 			if prev != game.phase {
@@ -1045,7 +1042,7 @@ func (game *Game) mainloop() {
 				if err := CanBuy(game, choice); err != "" {
 					panic(err)
 				}
-				fmt.Printf("%v buys %v for $%v\n", game.players[game.n].name, choice.name, game.Cost(choice))
+				fmt.Printf("%v buys %v for $%v\n", p.name, choice.name, game.Cost(choice))
 				game.Spend(choice)
 				game.Gain(p, choice)
 			case "play":
