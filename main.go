@@ -830,7 +830,7 @@ func main() {
 	game.players = []*Player{
 		//&Player{name: "Anonymous", fun: ng},
 		&Player{name: "Ben", fun: consoleGamer{}},
-		&Player{name:"AI", fun:simpleBuyer{ []string{"Province", "Gold", "Silver"} }},
+		&Player{name: "AI", fun: SimpleBuyer{[]string{"Province", "Gold", "Silver"}}},
 	}
 	players := game.players
 
@@ -985,19 +985,18 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 func (game *Game) mainloop() {
 	for game.n = 0; ; game.n = (game.n + 1) % len(game.players) {
 		game.a, game.b, game.c = 1, 1, 0
-		fresh := true
 		game.discount = 0
 		game.copperbonus = 0
 		game.aCount = 0
 		p := game.NowPlaying()
+		prev := phCleanup
 		for game.phase = phAction; game.phase <= phCleanup; {
-			if fresh {
+			if prev != game.phase {
 				game.Report(Event{s: "phase"})
-				fresh = false
+				prev = game.phase
 			}
 			if game.phase == phAction && game.a == 0 || game.phase == phBuy && game.b == 0 || game.phase == phCleanup {
 				game.phase++
-				fresh = true
 				continue
 			}
 			cmd := game.getCommand(p)
@@ -1017,7 +1016,6 @@ func (game *Game) mainloop() {
 				game.Play(cmd.c)
 			case "next":
 				game.phase++
-				fresh = true
 			}
 		}
 		game.Cleanup(p)
@@ -1203,58 +1201,6 @@ func (consoleGamer) start(game *Game, p *Player) {
 				panic("unreachable")
 			}()
 		}
-	}
-}
-
-type simpleBuyer struct {
-	list []string
-}
-
-func (this simpleBuyer) start(game *Game, p *Player) {
-	for {
-		<-p.trigger
-		if frame := game.StackTop(); frame != nil {
-			switch frame.card.name {
-			case "Bureaucrat":
-				for _, c := range p.hand {
-					if isVictory(c) {
-						game.ch <- Command{s: "pick", c: c}
-						<-p.trigger
-						break
-					}
-				}
-				panic("unreachable")
-			case "Militia":
-				// TODO: Better discard strategy.
-				for i := 0; i < 3; i++ {
-					game.ch <- Command{s: "pick", c: p.hand[i]}
-					<-p.trigger
-				}
-			default:
-				panic("AI unimplemented: " + frame.card.name)
-			}
-			continue
-		}
-		game.ch <- func() Command {
-			if game.phase == phAction {
-				return Command{s: "next"}
-			}
-			if game.phase != phBuy {
-				panic("unreachable")
-			}
-			for k := len(p.hand) - 1; k >= 0; k-- {
-				if isTreasure(p.hand[k]) {
-					return Command{s: "play", c: p.hand[k]}
-				}
-			}
-			for _, s := range this.list {
-				c := GetCard(s)
-				if game.c >= game.Cost(c) {
-					return Command{s: "buy", c: c}
-				}
-			}
-			return Command{s: "next"}
-		}()
 	}
 }
 
