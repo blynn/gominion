@@ -19,14 +19,22 @@ func (this SimpleBuyer) start(game *Game, p *Player) {
 				}
 				panic("unreachable")
 			case "Militia":
-				// TODO: Better discard strategy.
+				// Keep first 3 cards.
 				for i := 0; i < 3; i++ {
 					game.ch <- Command{s: "pick", c: p.hand[i]}
 					<-p.trigger
 				}
+			case "Masquerade":
+				// Throw away first card.
+				game.ch <- Command{s: "pick", c: p.hand[0]}
+				continue
 			case "Saboteur":
-				// TODO: Better Saboteur strategy.
-				game.ch <- Command{s: "pick"}  // Pick nothing!
+				// Pick nothing.
+				game.ch <- Command{s: "pick"}
+				continue
+			case "Torturer":
+				// Choose to gain a Curse.
+				game.ch <- Command{s: "2"}
 				continue
 			default:
 				panic("AI unimplemented: " + frame.card.name)

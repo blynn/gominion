@@ -51,8 +51,8 @@ func (c *Card) HasKind(k *Kind) bool {
 type Pile []*Card
 
 var (
-	KindDict                             = make(map[string]*Kind)
-	CardDict                             = make(map[string]*Card)
+	KindDict = make(map[string]*Kind)
+	CardDict = make(map[string]*Card)
 )
 
 var kTreasure, kVictory, kCurse, kAction, kReaction *Kind
@@ -90,7 +90,7 @@ func (deck *Pile) Add(s string) {
 type Game struct {
 	players    []*Player
 	p          *Player // Current player.
-	a, b, c    int // Actions, Buys, Coins,
+	a, b, c    int     // Actions, Buys, Coins,
 	suplist    Pile
 	ch         chan Command
 	phase      int
@@ -132,6 +132,14 @@ func (game *Game) DiscardList(p *Player, list Pile) {
 		// while another is trying look at the top discard?
 		game.Report(Event{s: "discard", n: p.n, i: len(list)})
 	}
+}
+
+func (game *Game) LeftOf(p *Player) *Player {
+	n := p.n
+	if n == 0 {
+		n = len(game.players)
+	}
+	return game.players[n-1]
 }
 
 func (game *Game) Cost(c *Card) int {
@@ -244,10 +252,10 @@ func (game *Game) Spend(c *Card) {
 	game.b--
 }
 
-func (game *Game) addCoins(n int)      { game.c += n }
-func (game *Game) addActions(n int)    { game.a += n }
-func (game *Game) addBuys(n int)       { game.b += n }
-func (game *Game) addCards(n int)      { game.draw(game.p, n) }
+func (game *Game) addCoins(n int)   { game.c += n }
+func (game *Game) addActions(n int) { game.a += n }
+func (game *Game) addBuys(n int)    { game.b += n }
+func (game *Game) addCards(n int)   { game.draw(game.p, n) }
 
 func (game *Game) SetParse(fun func(b byte) (Command, string)) {
 	game.stack[len(game.stack)-1].Parse = fun
@@ -624,10 +632,10 @@ func (game *Game) MaybeGain(p *Player, c *Card) bool {
 }
 
 type CardOpts struct {
-	cost int
-	exact bool
-	cond func(*Card) string
-	any bool  // Overrides the above options.
+	cost     int
+	exact    bool
+	cond     func(*Card) string
+	any      bool // Overrides the above options.
 	optional bool
 }
 
@@ -680,7 +688,7 @@ func pickCard(game *Game, p *Player, o CardOpts) *Card {
 }
 
 func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
-	c := pickCard(game, game.p, CardOpts{cost:max, cond:fun})
+	c := pickCard(game, game.p, CardOpts{cost: max, cond: fun})
 	game.Gain(game.p, c)
 	return c
 }
@@ -767,7 +775,7 @@ func (game *Game) getInts(p *Player, menu string, n int) []int {
 	}
 	var selection []int
 	game.SetParse(func(b byte) (Command, string) {
-		if b < '1' || b > '0' + byte(len(v)) {
+		if b < '1' || b > '0'+byte(len(v)) {
 			i := int(b - '0')
 			log.Printf("%d", i)
 			for _, x := range selection {
@@ -781,7 +789,7 @@ func (game *Game) getInts(p *Player, menu string, n int) []int {
 	})
 	for len(selection) < n {
 		cmd := game.getCommand(p)
-		selection = append(selection, int(cmd.s[0] - '0'))
+		selection = append(selection, int(cmd.s[0]-'0'))
 	}
 	return selection
 }
@@ -906,9 +914,9 @@ func main() {
 		out: make(chan string),
 	}
 	game.players = []*Player{
-		//&Player{name: "Anonymous", fun: ng},
+		&Player{name: "Anonymous", fun: ng},
 		&Player{name: "Ben", fun: consoleGamer{}},
-		&Player{name: "AI", fun: SimpleBuyer{[]string{"Province", "Gold", "Silver"}}},
+		//&Player{name: "AI", fun: SimpleBuyer{[]string{"Province", "Gold", "Silver"}}},
 	}
 	players := game.players
 
@@ -1004,12 +1012,19 @@ func main() {
 	}
 	var presets []Preset
 	for _, line := range strings.Split(`
-TEST:Courtyard,Pawn,Shanty Town,Steward,Swindler,Secret Chamber,Nobles,Upgrade,Trading Post,Saboteur
 First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
 Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
 Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village
 Size Distortion:Cellar,Chapel,Feast,Gardens,Laboratory,Thief,Village,Witch,Woodcutter,Workshop
 Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne Room,Village,Woodcutter
+
+Victory Dance:Bridge,Duke,Great Hall,Harem,Ironworks,Masquerade,Nobles,Pawn,Scout,Upgrade
+Secret Schemes:Conspirator,Harem,Ironworks,Pawn,Saboteur,Shanty Town,Steward,Swindler,Trading Post,Tribute
+Best Wishes:Coppersmith,Courtyard,Masquerade,Scout,Shanty Town,Steward,Torturer,Trading Post,Upgrade,Wishing Well
+
+Deconstruction:Bridge,Mining Village,Remodel,Saboteur,Secret Chamber,Spy,Swindler,Thief,Throne Room,Torturer
+Hand Madness:Bureaucrat,Chancellor,Council Room,Courtyard,Mine,Militia,Minion,Nobles,Steward,Torturer
+Underlings:Baron,Cellar,Festival,Library,Masquerade,Minion,Nobles,Pawn,Steward,Witch
 `, "\n") {
 		if len(line) == 0 {
 			continue
@@ -1036,8 +1051,7 @@ Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne R
 		fmt.Printf("  %v", pr.name)
 	}
 	fmt.Println()
-	//pr := presets[rand.Intn(len(presets))]
-	pr := presets[0]
+	pr := presets[rand.Intn(len(presets))]
 	fmt.Printf("Playing %q\n", pr.name)
 	for i, c := range pr.cards {
 		c.supply = 10
