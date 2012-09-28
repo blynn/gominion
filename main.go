@@ -910,9 +910,9 @@ func main() {
 		out: make(chan string),
 	}
 	game.players = []*Player{
-		&Player{name: "Anonymous", fun: ng},
+		//&Player{name: "Anonymous", fun: ng},
 		&Player{name: "Ben", fun: consoleGamer{}},
-		//&Player{name: "AI", fun: SimpleBuyer{[]string{"Province", "Gold", "Silver"}}},
+		&Player{name: "AI", fun: SimpleBuyer{[]string{"Province", "Gold", "Silver"}}},
 	}
 	players := game.players
 
@@ -974,18 +974,23 @@ func main() {
 	setSupply("Gold", 30)
 
 	numVictoryCards := func(n int) int {
-		switch n {
-		case 2:
-			return 8
-		case 3:
-			return 12
-		case 4:
-			return 12
+		if n < 2 || n > 6 {
+			panic(n)
 		}
-		panic(n)
-	}
+		if n == 2 {
+			return 8
+		}
+		return 12
+	}(len(players))
+
 	for _, s := range []string{"Estate", "Duchy", "Province"} {
-		setSupply(s, numVictoryCards(len(players)))
+		setSupply(s, numVictoryCards)
+	}
+	if len(players) > 4 {
+		setSupply("Province", 3 * len(players))
+		setSupply("Copper", 120 - 7 * len(players))
+		setSupply("Silver", 80)
+		setSupply("Gold", 60)
 	}
 	setSupply("Curse", 10*(len(players)-1))
 	layout := func(s string, key byte) {
@@ -1050,7 +1055,11 @@ Underlings:Baron,Cellar,Festival,Library,Masquerade,Minion,Nobles,Pawn,Steward,W
 	pr := presets[rand.Intn(len(presets))]
 	fmt.Printf("Playing %q\n", pr.name)
 	for i, c := range pr.cards {
-		c.supply = 10
+		if isVictory(c) {
+			c.supply = numVictoryCards
+		} else {
+			c.supply = 10
+		}
 		layout(c.name, keys[i])
 	}
 	for i, p := range players {
