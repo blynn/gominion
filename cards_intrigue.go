@@ -156,7 +156,7 @@ Nobles,6,Action-Victory,#2
 		},
 		"Mining Village": func(game *Game) {
 			p := game.p
-			if game.getBool(p) {
+			if game.getBool(p, "trash for $2?") {
 				game.trash = append(game.trash, p.played[len(p.played)-1])
 				p.played = p.played[:len(p.played)-1]
 				game.c += 2

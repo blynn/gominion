@@ -254,6 +254,11 @@ func (game *Game) addActions(n int) { game.a += n }
 func (game *Game) addBuys(n int)    { game.b += n }
 func (game *Game) addCards(n int)   { game.draw(game.p, n) }
 
+func (game *Game) SetParse2(prompt string, fun func(b byte) (Command, string)) {
+	frame := game.stack[len(game.stack)-1]
+	frame.Parse, frame.Prompt = fun, prompt
+}
+
 func (game *Game) SetParse(fun func(b byte) (Command, string)) {
 	game.stack[len(game.stack)-1].Parse = fun
 }
@@ -268,6 +273,7 @@ func (game *Game) StackTop() *Frame {
 
 type Frame struct {
 	Parse func(b byte) (Command, string)
+	Prompt string
 	card  *Card
 }
 
@@ -793,8 +799,8 @@ func (game *Game) getInts(p *Player, menu string, n int) []int {
 	return selection
 }
 
-func (game *Game) getBool(p *Player) bool {
-	game.SetParse(func(b byte) (Command, string) {
+func (game *Game) getBool(p *Player, prompt string) bool {
+	game.SetParse2(prompt, func(b byte) (Command, string) {
 		switch b {
 		case '\\':
 			return Command{s: "yes"}, ""
@@ -1218,11 +1224,16 @@ func (consoleGamer) start(game *Game, p *Player) {
 					}
 					i++
 					for i >= len(prog) {
-						fmt.Printf("a:%v b:%v c:%v %v", game.a, game.b, game.c, p.name)
+						fmt.Printf("a:%v b:%v c:%v", game.a, game.b, game.c)
 						if frame != nil {
-							fmt.Printf(" %v", frame.card.name)
+							if frame.Prompt != "" {
+								fmt.Printf(" %v: %v ", frame.card.name, frame.Prompt)
+							} else {
+								fmt.Printf(" %v> ", frame.card.name)
+							}
+						} else {
+							fmt.Printf("> ")
 						}
-						fmt.Printf("> ")
 						s, err := reader.ReadString('\n')
 						if err == io.EOF {
 							fmt.Printf("\nQuitting game...\n")

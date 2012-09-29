@@ -50,7 +50,7 @@ Adventurer,6,Action
 		},
 		"Chancellor": func(game *Game) {
 			p := game.p
-			if len(p.deck) > 0 && game.getBool(p) {
+			if len(p.deck) > 0 && game.getBool(p, "discard deck?") {
 				p.discard, p.deck = append(p.discard, p.deck...), nil
 				game.Report(Event{s: "discarddeck", n: p.n, i: len(p.deck)})
 			}
@@ -134,7 +134,7 @@ Adventurer,6,Action
 					return
 				}
 				c := game.reveal(other)
-				if game.getBool(p) {
+				if game.getBool(p, "discard?") {
 					game.DiscardList(other, Pile{c})
 					other.deck = other.deck[1:]
 				}
@@ -166,7 +166,7 @@ Adventurer,6,Action
 				if len(loot) > 0 {
 					c := loot[0]
 					game.TrashCard(other, c)
-					if c.supply > 0 && game.getBool(p) {
+					if c.supply > 0 && game.getBool(p, "gain " + c.name + "?") {
 						game.Gain(p, c)
 					}
 				}
@@ -203,7 +203,7 @@ Adventurer,6,Action
 				} else {
 					mustAsk = game.fetch()[0] == "yes"
 				}
-				if mustAsk && game.getBool(p) {
+				if mustAsk && game.getBool(p, "set aside?") {
 					var c *Card
 					if game.isServer {
 						c = p.hand[len(p.hand)-1]
