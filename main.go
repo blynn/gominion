@@ -125,13 +125,14 @@ func (game *Game) TrashList(p *Player, list Pile) {
 	}
 }
 
-func (game *Game) DiscardList(p *Player, list Pile) {
+func (game *Game) DiscardList(p *Player, list Pile) Pile {
 	if len(list) > 0 {
 		p.discard = append(p.discard, list...)
 		// TODO: Race condition: what if player shuffles discards into deck
 		// while another is trying look at the top discard?
 		game.Report(Event{s: "discard", n: p.n, i: len(list)})
 	}
+	return list
 }
 
 func (game *Game) LeftOf(p *Player) *Player {
@@ -321,35 +322,37 @@ func (game *Game) Report(ev Event) {
 
 func (game *Game) draw(p *Player, n int) int {
 	count := 0
-	if game.isServer {
-		s := ""
-		sSecret := ""
-		i := 0
-		for ; i < n && p.MaybeShuffle(); i++ {
-			c := p.deck[0]
-			p.deck, p.hand = p.deck[1:], append(p.hand, c)
-			s += string(c.key)
-			sSecret += "?"
-		}
-		game.castCond(func(x *Player) bool { return x == p }, "draw", s)
-		game.castCond(func(x *Player) bool { return x != p }, "draw", sSecret)
-		count = i
-	} else {
-		w := game.fetch()
-		for _, b := range []byte(w[0]) {
-			if len(p.deck) == 0 {
-				p.deck, p.discard = p.discard, nil
+	if n > 0 {
+		if game.isServer {
+			s := ""
+			sSecret := ""
+			i := 0
+			for ; i < n && p.MaybeShuffle(); i++ {
+				c := p.deck[0]
+				p.deck, p.hand = p.deck[1:], append(p.hand, c)
+				s += string(c.key)
+				sSecret += "?"
 			}
-			p.deck = p.deck[1:]
-			if b != '?' {
-				p.hand = append(p.hand, game.keyToCard(b))
-			} else {
-				p.hand = append(p.hand, nil)
+			game.castCond(func(x *Player) bool { return x == p }, "draw", s)
+			game.castCond(func(x *Player) bool { return x != p }, "draw", sSecret)
+			count = i
+		} else {
+			w := game.fetch()
+			for _, b := range []byte(w[0]) {
+				if len(p.deck) == 0 {
+					p.deck, p.discard = p.discard, nil
+				}
+				p.deck = p.deck[1:]
+				if b != '?' {
+					p.hand = append(p.hand, game.keyToCard(b))
+				} else {
+					p.hand = append(p.hand, nil)
+				}
 			}
+			count = len(w[0])
 		}
-		count = len(w[0])
+		game.Report(Event{s: "draw", n: p.n, i: count})
 	}
-	game.Report(Event{s: "draw", n: p.n, i: count})
 	return count
 }
 
@@ -910,9 +913,9 @@ func main() {
 		out: make(chan string),
 	}
 	game.players = []*Player{
-		//&Player{name: "Anonymous", fun: ng},
+		&Player{name: "Anonymous", fun: ng},
 		&Player{name: "Ben", fun: consoleGamer{}},
-		&Player{name: "AI", fun: SimpleBuyer{[]string{"Province", "Gold", "Silver"}}},
+		//&Player{name: "AI", fun: SimpleBuyer{[]string{"Province", "Gold", "Silver"}}},
 	}
 	players := game.players
 

@@ -43,11 +43,7 @@ Adventurer,6,Action
 	Fun: map[string]func(game *Game){
 		"Cellar": func(game *Game) {
 			p := game.p
-			selected := game.pickHand(p, pickOpts{n: len(p.hand)})
-			if len(selected) > 0 {
-				game.DiscardList(p, selected)
-				game.draw(p, len(selected))
-			}
+			game.draw(p, len(game.DiscardList(p, game.pickHand(p, pickOpts{n: len(p.hand)}))))
 		},
 		"Chapel": func(game *Game) {
 			game.TrashList(game.p, game.pickHand(game.p, pickOpts{n: 4}))

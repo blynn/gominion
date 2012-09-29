@@ -55,7 +55,7 @@ func (this SimpleBuyer) start(game *Game, p *Player) {
 			}
 			for _, s := range this.list {
 				c := GetCard(s)
-				if game.c >= game.Cost(c) {
+				if game.c >= game.Cost(c) && c.supply > 0 {
 					return Command{s: "buy", c: c}
 				}
 			}

@@ -57,11 +57,7 @@ Nobles,6,Action-Victory,#2
 		},
 		"Secret Chamber": func(game *Game) {
 			p := game.p
-			selected := game.pickHand(p, pickOpts{n: len(p.hand)})
-			if len(selected) > 0 {
-				game.DiscardList(p, selected)
-				game.c += len(selected)
-			}
+			game.c += len(game.DiscardList(p, game.pickHand(p, pickOpts{n: len(p.hand)})))
 		},
 		"Masquerade": func(game *Game) {
 			m := len(game.players)
@@ -239,10 +235,7 @@ Nobles,6,Action-Victory,#2
 				v := game.getInts(other, "discard 2; gain Curse in hand", 1)
 				switch v[0] - 1 {
 				case 0:
-					selected := game.pickHand(other, pickOpts{n: 2, exact: true})
-					if len(selected) > 0 {
-						game.DiscardList(other, selected)
-					}
+					game.DiscardList(other, game.pickHand(other, pickOpts{n: 2, exact: true}))
 				case 1:
 					game.MaybeGain(other, GetCard("Curse"))
 				}
