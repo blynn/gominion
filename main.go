@@ -128,8 +128,6 @@ func (game *Game) TrashList(p *Player, list Pile) {
 func (game *Game) DiscardList(p *Player, list Pile) Pile {
 	if len(list) > 0 {
 		p.discard = append(p.discard, list...)
-		// TODO: Race condition: what if player shuffles discards into deck
-		// while another is trying look at the top discard?
 		game.Report(Event{s: "discard", n: p.n, i: len(list)})
 	}
 	return list
@@ -319,9 +317,12 @@ func (p *Player) MaybeShuffle() bool {
 }
 
 func (game *Game) Report(ev Event) {
-	for _, other := range game.players {
-		if other.herald != nil {
-			other.herald <- ev
+	for _, p := range game.players {
+		if p.herald != nil {
+			p.herald <- ev
+			if (<-game.ch).s != "ack" {
+				panic("expected ack")
+			}
 		}
 	}
 }
@@ -920,7 +921,7 @@ func main() {
 	}
 	game.players = []*Player{
 		&Player{name: "Anonymous", fun: ng},
-		&Player{name: "Ben", fun: consoleGamer{}},
+		&Player{name: "Ben", fun: consoleGamer{}, herald: make(chan Event)},
 		//&Player{name: "AI", fun: SimpleBuyer{[]string{"Province", "Gold", "Silver"}}},
 	}
 	players := game.players
@@ -1152,7 +1153,6 @@ func (game *Game) mainloop() {
 type consoleGamer struct{}
 
 func (consoleGamer) start(game *Game, p *Player) {
-	p.herald = make(chan Event)
 	game.dump()
 	reader := bufio.NewReader(os.Stdin)
 	i := 0
@@ -1183,7 +1183,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 					}
 				}
 			case "phase":
-				if x == p && game.phase == phAction {
+				if game.p == p && game.phase == phAction {
 					p.dumpHand()
 				}
 			case "draw":
@@ -1196,6 +1196,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 					}
 				}
 			}
+			game.ch <- Command{s:"ack"}
 		case <-p.trigger:
 			game.ch <- func() Command {
 				frame := game.StackTop()
@@ -1424,18 +1425,15 @@ func client(host string) {
 		}
 		panic("unreachable")
 	}
-	v := strings.Split(next()[0], "\n")
-	if v[0] != "new" {
-		log.Fatalf("want 'new', got %q", v[0])
-	}
-	var p *Player
+	p := &Player{name: "Anonymous", fun: consoleGamer{}, herald:make(chan Event), trigger: make(chan bool)}
+
 	game := &Game{
 		ch: make(chan Command),
 		sendCmd: func(game *Game, other *Player, cmd *Command) {
 			if p != other {
 				return
 			}
-			v = next()
+			v := next()
 			if v[0] != "go" {
 				log.Fatalf("want 'go', got %q", v[0])
 			}
@@ -1453,9 +1451,8 @@ func client(host string) {
 			}
 		}, GetDiscard: func(game *Game, p *Player) string {
 			return send(fmt.Sprintf("%vdiscard?n=%v", host, p.n))
-		}}
-	game.fetch = func() []string {
-		return next()[1:]
+		},
+	  fetch: func() []string { return next()[1:] },
 	}
 
 	sharedTrigger := make(chan bool)
@@ -1473,9 +1470,12 @@ func client(host string) {
 			}
 		}
 	}()
-	p = &Player{name: "Anonymous", fun: consoleGamer{}, trigger: make(chan bool)}
 	heading := ""
 	pn := 0
+	v := strings.Split(next()[0], "\n")
+	if v[0] != "new" {
+		log.Fatalf("want 'new', got %q", v[0])
+	}
 	for _, line := range v[1:] {
 		if len(line) == 0 {
 			continue
