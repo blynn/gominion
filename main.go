@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -109,7 +110,8 @@ type Game struct {
 }
 
 const (
-	phAction = iota
+	phSetup = iota
+	phAction
 	phBuy
 	phCleanup
 )
@@ -134,7 +136,7 @@ func (game *Game) DiscardList(p *Player, list Pile) Pile {
 }
 
 func (game *Game) LeftOf(p *Player) *Player {
-	return game.players[(p.n + 1) % len(game.players)]
+	return game.players[(p.n+1)%len(game.players)]
 }
 
 func (game *Game) Cost(c *Card) int {
@@ -270,9 +272,9 @@ func (game *Game) StackTop() *Frame {
 }
 
 type Frame struct {
-	Parse func(b byte) (Command, string)
+	Parse  func(b byte) (Command, string)
 	Prompt string
-	card  *Card
+	card   *Card
 }
 
 type Command struct {
@@ -290,9 +292,10 @@ type Player struct {
 	n                                     int
 	fun                                   PlayFun
 	manifest, deck, hand, played, discard Pile
-	trigger                               chan bool   // When triggered, Player sends a Command on game.ch.
-	recv                                  chan string // For sending decisions to remote clients.
-	herald                                chan Event  // Events that may be worth printing.
+	trigger                               chan bool // When triggered, Player sends a Command on game.ch.
+	// TODO: Move recv to netGamer?
+	recv   chan string // For sending decisions to remote clients.
+	herald chan Event  // Events that may be worth printing.
 }
 
 type Event struct {
@@ -701,7 +704,7 @@ func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 
 func pickGain(game *Game, max int) *Card { return pickGainCond(game, max, nil) }
 
-var errCmd Command
+var errCmd = Command{s: "error"}
 
 func (p *Player) inHand(cond func(*Card) bool) bool {
 	for _, c := range p.hand {
@@ -886,6 +889,7 @@ func loadDB(db CardDB) {
 }
 
 func main() {
+	runtime.GOMAXPROCS(4)
 	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
 		KindDict[s] = &Kind{s}
 	}
@@ -906,6 +910,7 @@ func main() {
 
 	rand.Seed(time.Now().Unix())
 	fmt.Println("= Gominion =")
+
 	game := &Game{ch: make(chan Command), isServer: true,
 		sendCmd: func(game *Game, p *Player, cmd *Command) {
 			if cmd.c == nil {
@@ -914,30 +919,68 @@ func main() {
 				game.cast("cmd", cmd.s, cmd.c)
 			}
 		},
-	}
-	ng := netGamer{
-		in:  make(chan Command),
-		out: make(chan string),
+		GetDiscard: func(game *Game, p *Player) string { return p.discard[len(p.discard)-1].name },
 	}
 	game.players = []*Player{
-		&Player{name: "Anonymous", fun: ng},
 		&Player{name: "Ben", fun: consoleGamer{}, herald: make(chan Event)},
-		//&Player{name: "AI", fun: SimpleBuyer{[]string{"Province", "Gold", "Silver"}}},
+		&Player{name: "AI", fun: SimpleBuyer{[]string{"Province", "Gold", "Silver"}}},
 	}
-	players := game.players
+	for i, p := range game.players {
+		p.n = i
+		p.trigger = make(chan bool)
+		go p.fun.start(game, p)
+	}
+	clients := make(map[string]*netGamer)
+	http.HandleFunc("/reg", func(w http.ResponseWriter, r *http.Request) {
+		name := r.FormValue("name")
+		if name == "" {
+			fmt.Fprintf(w, "error: nil name")
+			return
+		}
+		for _, p := range game.players {
+			if p.name == name {
+				fmt.Fprintf(w, "error: name already taken")
+				return
+			}
+		}
+		ng := &netGamer{
+			in:  make(chan Command),
+			out: make(chan string),
+		}
+		clients[name] = ng
+		p := &Player{name: name, n: len(game.players), fun: ng}
+		p.trigger = make(chan bool)
+		p.recv = make(chan string)
+		game.players = append(game.players, p)
+		go ng.start(game, p)
+		fmt.Fprintf(w, name)
+		fmt.Printf("%v joined\n", name)
+	})
 
 	http.HandleFunc("/discard", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, game.GetDiscard(game, game.players[PanickyAtoi(r.FormValue("n"))]))
 	})
 
 	http.HandleFunc("/poll", func(w http.ResponseWriter, r *http.Request) {
+		ng, ok := clients[r.FormValue("id")]
+		if !ok {
+			fmt.Fprintf(w, "error: no such id")
+			return
+		}
 		ng.in <- Command{s: "poll"}
 		fmt.Fprintf(w, <-ng.out)
 	})
 
 	http.HandleFunc("/cmd", func(w http.ResponseWriter, r *http.Request) {
+		ng, ok := clients[r.FormValue("id")]
+		if !ok {
+			log.Print("error: no such id")
+			fmt.Fprintf(w, "error: no such id")
+			return
+		}
 		s := r.FormValue("s")
 		if s == "" {
+			log.Print("error: no command")
 			fmt.Fprintf(w, "error: no command")
 			return
 		}
@@ -956,9 +999,8 @@ func main() {
 		fmt.Fprintf(w, <-ng.out)
 	})
 
-	go func() {
-		log.Fatal(http.ListenAndServe(":8080", nil))
-	}()
+	go func() { log.Fatal(http.ListenAndServe(":8080", nil)) }()
+	time.Sleep(8 * time.Millisecond)
 	for n := 0; ; n++ {
 		resp, err := http.Get("http://:8080/")
 		if err != nil {
@@ -972,6 +1014,15 @@ func main() {
 		break
 	}
 
+	for {
+		p := game.players[0]
+		cmd := game.getCommand(p)
+		if cmd.s == "start" {
+			break
+		}
+		fmt.Println(cmd.s + ": type 'start' to start")
+	}
+
 	setSupply := func(s string, n int) {
 		c, ok := CardDict[s]
 		if !ok {
@@ -979,7 +1030,7 @@ func main() {
 		}
 		c.supply = n
 	}
-	setSupply("Copper", 60-7*len(players))
+	setSupply("Copper", 60-7*len(game.players))
 	setSupply("Silver", 40)
 	setSupply("Gold", 30)
 
@@ -991,18 +1042,18 @@ func main() {
 			return 8
 		}
 		return 12
-	}(len(players))
+	}(len(game.players))
 
 	for _, s := range []string{"Estate", "Duchy", "Province"} {
 		setSupply(s, numVictoryCards)
 	}
-	if len(players) > 4 {
-		setSupply("Province", 3 * len(players))
-		setSupply("Copper", 120 - 7 * len(players))
+	if len(game.players) > 4 {
+		setSupply("Province", 3*len(game.players))
+		setSupply("Copper", 120-7*len(game.players))
 		setSupply("Silver", 80)
 		setSupply("Gold", 60)
 	}
-	setSupply("Curse", 10*(len(players)-1))
+	setSupply("Curse", 10*(len(game.players)-1))
 	layout := func(s string, key byte) {
 		c := GetCard(s)
 		game.suplist = append(game.suplist, c)
@@ -1056,7 +1107,6 @@ Underlings:Baron,Cellar,Festival,Library,Masquerade,Minion,Nobles,Pawn,Steward,W
 		}
 		presets = append(presets, pr)
 	}
-
 	fmt.Println("Picking preset:")
 	for _, pr := range presets {
 		fmt.Printf("  %v", pr.name)
@@ -1072,22 +1122,18 @@ Underlings:Baron,Cellar,Festival,Library,Masquerade,Minion,Nobles,Pawn,Steward,W
 		}
 		layout(c.name, keys[i])
 	}
-	for i, p := range players {
+	for _, p := range game.players {
 		p.InitDeck()
 		p.deck = append(p.deck, p.manifest...)
 		p.deck.shuffle()
 		p.hand, p.deck = p.deck[:5], p.deck[5:]
-		p.trigger = make(chan bool)
-		p.n = i
-		go p.fun.start(game, p)
 	}
-	game.GetDiscard = func(game *Game, p *Player) string {
-		if len(p.discard) == 0 {
-			log.Print("BUG ", p.name)
-			return "BUG!"
+	for _, p := range game.players {
+		if p.recv != nil {
+			p.recv <- "new\n= Players =\n" + encodePlayers(game.players) + "= Kingdom =\n" + encodeKingdom(game) + "= Hand =\n" + encodeHand(p)
 		}
-		return p.discard[len(p.discard)-1].name
 	}
+	game.dump()
 	game.mainloop()
 }
 
@@ -1153,7 +1199,6 @@ func (game *Game) mainloop() {
 type consoleGamer struct{}
 
 func (consoleGamer) start(game *Game, p *Player) {
-	game.dump()
 	reader := bufio.NewReader(os.Stdin)
 	i := 0
 	prog := ""
@@ -1196,9 +1241,36 @@ func (consoleGamer) start(game *Game, p *Player) {
 					}
 				}
 			}
-			game.ch <- Command{s:"ack"}
+			game.ch <- Command{s: "ack"}
 		case <-p.trigger:
 			game.ch <- func() Command {
+				if game.phase == phSetup {
+					// TODO: Remove duplicate code.
+					for {
+						fmt.Printf("> ")
+						s, err := reader.ReadString('\n')
+						if err == io.EOF {
+							fmt.Printf("\nQuitting game...\n")
+							return Command{s: "quit"}
+						}
+						if err != nil {
+							panic(err)
+						}
+						s = strings.TrimSpace(s)
+						if s == "" {
+							continue
+						}
+						switch s {
+						case "start":
+							if len(game.players) == 1 {
+								fmt.Println("need at least 2 players")
+								continue
+							}
+							return Command{s: "start"}
+						}
+						fmt.Printf("bad command: %v\n", s)
+					}
+				}
 				frame := game.StackTop()
 				if frame == nil {
 					// Automatically advance to next phase when it's obvious.
@@ -1349,9 +1421,7 @@ type netGamer struct {
 }
 
 func (this netGamer) start(game *Game, p *Player) {
-	p.recv = make(chan string)
 	var q []string
-	fresh := true
 	ready := false
 	for {
 		select {
@@ -1364,15 +1434,11 @@ func (this netGamer) start(game *Game, p *Player) {
 			q = append(q, "go")
 			ready = true
 		case cmd := <-this.in:
-			if fresh {
-				fresh = false
-				this.out <- "new\n= Players =\n" + encodePlayers(game.players) + "= Kingdom =\n" + encodeKingdom(game) + "= Hand =\n" + encodeHand(p)
-				break
-			}
 			switch cmd.s {
 			case "poll":
 				if len(q) == 0 {
 					if ready {
+						log.Print("extra poll")
 						this.out <- "Go!"
 					} else {
 						this.out <- "wait"
@@ -1396,6 +1462,11 @@ func (this netGamer) start(game *Game, p *Player) {
 }
 
 func client(host string) {
+	p := &Player{fun: consoleGamer{}, herald: make(chan Event), trigger: make(chan bool)}
+	rand.Seed(time.Now().Unix())
+	for i := 0; i < 3; i++ {
+		p.name = p.name + string('A'+rand.Intn(26))
+	}
 	host = "http://" + host + "/"
 	send := func(u string) string {
 		resp, err := http.Get(u)
@@ -1411,7 +1482,7 @@ func client(host string) {
 	}
 	next := func() []string {
 		for {
-			body := send(host + "poll")
+			body := send(host + "poll?id=" + p.name)
 			if body == "wait" {
 				time.Sleep(200 * time.Millisecond)
 				continue
@@ -1425,7 +1496,9 @@ func client(host string) {
 		}
 		panic("unreachable")
 	}
-	p := &Player{name: "Anonymous", fun: consoleGamer{}, herald:make(chan Event), trigger: make(chan bool)}
+	if err := send(host + "reg?name=" + p.name); err != p.name {
+		log.Fatalf("registration: " + err)
+	}
 
 	game := &Game{
 		ch: make(chan Command),
@@ -1437,7 +1510,7 @@ func client(host string) {
 			if v[0] != "go" {
 				log.Fatalf("want 'go', got %q", v[0])
 			}
-			u := host + "cmd?s=" + cmd.s
+			u := host + "cmd?id=" + p.name + "&s=" + cmd.s
 			if cmd.c != nil {
 				u += "&c=" + string(cmd.c.key)
 			}
@@ -1452,7 +1525,7 @@ func client(host string) {
 		}, GetDiscard: func(game *Game, p *Player) string {
 			return send(fmt.Sprintf("%vdiscard?n=%v", host, p.n))
 		},
-	  fetch: func() []string { return next()[1:] },
+		fetch: func() []string { return next()[1:] },
 	}
 
 	sharedTrigger := make(chan bool)
@@ -1472,6 +1545,7 @@ func client(host string) {
 	}()
 	heading := ""
 	pn := 0
+	next() // Server sends start command first.
 	v := strings.Split(next()[0], "\n")
 	if v[0] != "new" {
 		log.Fatalf("want 'new', got %q", v[0])
@@ -1518,5 +1592,6 @@ func client(host string) {
 		}
 	}
 	go p.fun.start(game, p)
+	game.dump()
 	game.mainloop()
 }

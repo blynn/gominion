@@ -166,7 +166,7 @@ Adventurer,6,Action
 				if len(loot) > 0 {
 					c := loot[0]
 					game.TrashCard(other, c)
-					if c.supply > 0 && game.getBool(p, "gain " + c.name + "?") {
+					if c.supply > 0 && game.getBool(p, "gain "+c.name+"?") {
 						game.Gain(p, c)
 					}
 				}
