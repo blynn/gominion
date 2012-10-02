@@ -310,4 +310,13 @@ Nobles,6,Action-Victory,#2
 			return n
 		},
 	},
+	Presets: `
+Victory Dance:Bridge,Duke,Great Hall,Harem,Ironworks,Masquerade,Nobles,Pawn,Scout,Upgrade
+Secret Schemes:Conspirator,Harem,Ironworks,Pawn,Saboteur,Shanty Town,Steward,Swindler,Trading Post,Tribute
+Best Wishes:Coppersmith,Courtyard,Masquerade,Scout,Shanty Town,Steward,Torturer,Trading Post,Upgrade,Wishing Well
+
+Deconstruction:Bridge,Mining Village,Remodel,Saboteur,Secret Chamber,Spy,Swindler,Thief,Throne Room,Torturer
+Hand Madness:Bureaucrat,Chancellor,Council Room,Courtyard,Mine,Militia,Minion,Nobles,Steward,Torturer
+Underlings:Baron,Cellar,Festival,Library,Masquerade,Minion,Nobles,Pawn,Steward,Witch
+`,
 }

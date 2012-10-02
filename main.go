@@ -824,10 +824,18 @@ func (game *Game) getBool(p *Player, prompt string) bool {
 }
 
 type CardDB struct {
-	List string
-	Fun  map[string]func(game *Game)
-	VP   map[string]func(game *Game) int
+	List    string
+	Fun     map[string]func(game *Game)
+	VP      map[string]func(game *Game) int
+	Presets string
 }
+
+type Preset struct {
+	name  string
+	cards Pile
+}
+
+var presets []Preset
 
 func loadDB(db CardDB) {
 	for _, s := range strings.Split(db.List, "\n") {
@@ -885,6 +893,26 @@ func loadDB(db CardDB) {
 		if fun, ok := db.VP[c.name]; ok {
 			c.vp = fun
 		}
+	}
+	for _, line := range strings.Split(db.Presets, "\n") {
+		if len(line) == 0 {
+			continue
+		}
+		s := strings.Split(line, ":")
+		pr := Preset{name: s[0]}
+		for _, s := range strings.Split(s[1], ",") {
+			c := GetCard(s)
+			// Insertion sort.
+			pr.cards = func(cards Pile) Pile {
+				for i, x := range cards {
+					if x.cost == c.cost && x.name > c.name || x.cost > c.cost {
+						return append(cards[:i], append(Pile{c}, cards[i:]...)...)
+					}
+				}
+				return append(cards, c)
+			}(pr.cards)
+		}
+		presets = append(presets, pr)
 	}
 }
 
@@ -1014,13 +1042,24 @@ func main() {
 		break
 	}
 
+	fmt.Println("Available presets:")
+	for _, pr := range presets {
+		fmt.Printf("  %v", pr.name)
+	}
+	fmt.Println()
+	pr := presets[rand.Intn(len(presets))]
+
 	for {
 		p := game.players[0]
 		cmd := game.getCommand(p)
 		if cmd.s == "start" {
 			break
 		}
-		fmt.Println(cmd.s + ": type 'start' to start")
+		switch cmd.s {
+		case "preset":
+			pr = presets[cmd.i]
+			fmt.Printf("Playing %q\n", pr.name)
+		}
 	}
 
 	setSupply := func(s string, n int) {
@@ -1068,52 +1107,6 @@ func main() {
 	layout("Curse", '!')
 	keys := "asdfgzxcvb"
 
-	type Preset struct {
-		name  string
-		cards Pile
-	}
-	var presets []Preset
-	for _, line := range strings.Split(`
-First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
-Big Money:Adventurer,Bureaucrat,Chancellor,Chapel,Feast,Laboratory,Market,Mine,Moneylender,Throne Room
-Interaction:Bureaucrat,Chancellor,Council Room,Festival,Library,Militia,Moat,Spy,Thief,Village
-Size Distortion:Cellar,Chapel,Feast,Gardens,Laboratory,Thief,Village,Witch,Woodcutter,Workshop
-Village Square:Bureaucrat,Cellar,Festival,Library,Market,Remodel,Smithy,Throne Room,Village,Woodcutter
-
-Victory Dance:Bridge,Duke,Great Hall,Harem,Ironworks,Masquerade,Nobles,Pawn,Scout,Upgrade
-Secret Schemes:Conspirator,Harem,Ironworks,Pawn,Saboteur,Shanty Town,Steward,Swindler,Trading Post,Tribute
-Best Wishes:Coppersmith,Courtyard,Masquerade,Scout,Shanty Town,Steward,Torturer,Trading Post,Upgrade,Wishing Well
-
-Deconstruction:Bridge,Mining Village,Remodel,Saboteur,Secret Chamber,Spy,Swindler,Thief,Throne Room,Torturer
-Hand Madness:Bureaucrat,Chancellor,Council Room,Courtyard,Mine,Militia,Minion,Nobles,Steward,Torturer
-Underlings:Baron,Cellar,Festival,Library,Masquerade,Minion,Nobles,Pawn,Steward,Witch
-`, "\n") {
-		if len(line) == 0 {
-			continue
-		}
-		s := strings.Split(line, ":")
-		pr := Preset{name: s[0]}
-		for _, s := range strings.Split(s[1], ",") {
-			c := GetCard(s)
-			// Insertion sort.
-			pr.cards = func(cards Pile) Pile {
-				for i, x := range cards {
-					if x.cost == c.cost && x.name > c.name || x.cost > c.cost {
-						return append(cards[:i], append(Pile{c}, cards[i:]...)...)
-					}
-				}
-				return append(cards, c)
-			}(pr.cards)
-		}
-		presets = append(presets, pr)
-	}
-	fmt.Println("Picking preset:")
-	for _, pr := range presets {
-		fmt.Printf("  %v", pr.name)
-	}
-	fmt.Println()
-	pr := presets[rand.Intn(len(presets))]
-	fmt.Printf("Playing %q\n", pr.name)
 	for i, c := range pr.cards {
 		if isVictory(c) {
 			c.supply = numVictoryCards
@@ -1245,22 +1238,38 @@ func (consoleGamer) start(game *Game, p *Player) {
 		case <-p.trigger:
 			game.ch <- func() Command {
 				if game.phase == phSetup {
-					// TODO: Remove duplicate code.
 					for {
 						fmt.Printf("> ")
 						s, err := reader.ReadString('\n')
 						if err == io.EOF {
-							fmt.Printf("\nQuitting game...\n")
-							return Command{s: "quit"}
+							panic("EOF")
 						}
 						if err != nil {
 							panic(err)
 						}
-						s = strings.TrimSpace(s)
-						if s == "" {
+						v := strings.SplitN(strings.TrimSpace(s), " ", 2)
+						if len(v) == 0 {
 							continue
 						}
-						switch s {
+						for i := range v {
+							v[i] = strings.TrimSpace(v[i])
+						}
+						switch v[0] {
+						case "preset":
+							if len(v) == 1 {
+								// TODO: List presets.
+								continue
+							}
+							re, err := regexp.Compile(v[1])
+							if err != nil {
+								fmt.Printf("bad regex: %v: %v\n", v[1], err)
+								continue
+							}
+							for i, preset := range presets {
+								if re.MatchString(preset.name) || re.MatchString(strings.ToLower(preset.name)) {
+									return Command{s: "preset", i: i}
+								}
+							}
 						case "start":
 							if len(game.players) == 1 {
 								fmt.Println("need at least 2 players")
@@ -1545,11 +1554,19 @@ func client(host string) {
 	}()
 	heading := ""
 	pn := 0
-	next() // Server sends start command first.
-	v := strings.Split(next()[0], "\n")
-	if v[0] != "new" {
-		log.Fatalf("want 'new', got %q", v[0])
+	var v []string
+	for {
+		v = strings.Split(next()[0], "\n")
+		if v[0] == "new" {
+			break
+		}
 	}
+	/*
+		v := strings.Split(next()[0], "\n")
+		if v[0] != "new" {
+			log.Fatalf("want 'new', got %q", v[0])
+		}
+	*/
 	for _, line := range v[1:] {
 		if len(line) == 0 {
 			continue
