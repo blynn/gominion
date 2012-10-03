@@ -36,7 +36,7 @@ Nobles,6,Action-Victory,#2
 		"Courtyard": func(game *Game) {
 			p := game.p
 			for _, c := range game.pickHand(p, "1") {
-				fmt.Printf("%v decks %v\n", p.name, c.name)
+				fmt.Printf("%v decks a card\n", p.name)
 				p.deck = append(Pile{c}, p.deck...)
 			}
 		},
@@ -99,15 +99,20 @@ Nobles,6,Action-Victory,#2
 		},
 		"Swindler": func(game *Game) {
 			game.attack(func(other *Player) {
+				if !other.MaybeShuffle() {
+					return
+				}
 				c := game.reveal(other)
 				other.deck = other.deck[1:]
 				game.TrashCard(other, c)
-				sub := pickCard(game, game.p, CardOpts{cost: game.Cost(c), exact: true})
-				game.Gain(other, sub)
+				game.MaybeGain(other, pickCard(game, game.p, CardOpts{cost: game.Cost(c), exact: true}))
 			})
 		},
 		"Wishing Well": func(game *Game) {
 			p := game.p
+			if !p.MaybeShuffle() {
+				return
+			}
 			c := pickCard(game, p, CardOpts{any: true})
 			if c == game.reveal(p) {
 				fmt.Printf("%v puts %v in hand\n", p.name, c.name)
@@ -203,10 +208,10 @@ Nobles,6,Action-Victory,#2
 				var v Pile
 				var c *Card
 				for {
-					c = game.reveal(other)
-					if c == nil {
+					if !other.MaybeShuffle() {
 						break
 					}
+					c = game.reveal(other)
 					other.deck = other.deck[1:]
 					if game.Cost(c) >= 3 {
 						break
@@ -215,10 +220,7 @@ Nobles,6,Action-Victory,#2
 				}
 				if c != nil {
 					game.TrashCard(other, c)
-					sub := pickCard(game, other, CardOpts{cost: game.Cost(c) - 2, optional: true})
-					if sub != nil {
-						game.Gain(other, sub)
-					}
+					game.MaybeGain(other, pickCard(game, other, CardOpts{cost: game.Cost(c) - 2, optional: true}))
 				}
 				if len(v) > 0 {
 					game.DiscardList(other, v)
@@ -279,8 +281,7 @@ Nobles,6,Action-Victory,#2
 				return
 			}
 			game.TrashCard(p, selected[0])
-			c := pickCard(game, p, CardOpts{cost: game.Cost(selected[0]) + 1, exact: true})
-			game.Gain(p, c)
+			game.MaybeGain(p, pickCard(game, p, CardOpts{cost: game.Cost(selected[0]) + 1, exact: true}))
 		},
 		"Nobles": func(game *Game) {
 			v := game.getInts(game.p, "+3 Cards; +2 Actions", 1)

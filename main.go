@@ -650,7 +650,7 @@ func (game *Game) split(list Pile, p *Player, fmt string) (Pile, Pile) {
 	return in, out
 }
 
-func (game *Game) Gain(p *Player, c *Card) {
+func (game *Game) panickyGain(p *Player, c *Card) {
 	if c.supply == 0 {
 		panic("out of supply")
 	}
@@ -660,10 +660,13 @@ func (game *Game) Gain(p *Player, c *Card) {
 }
 
 func (game *Game) MaybeGain(p *Player, c *Card) bool {
+	if c == nil {
+		return false
+	}
 	if c.supply == 0 {
 		return false
 	}
-	game.Gain(p, c)
+	game.panickyGain(p, c)
 	return true
 }
 
@@ -676,7 +679,6 @@ type CardOpts struct {
 }
 
 func pickCard(game *Game, p *Player, o CardOpts) *Card {
-	// TODO: Return nil if impossible.
 	isValid := func(c *Card) string {
 		if c == nil {
 			if o.optional {
@@ -699,6 +701,25 @@ func pickCard(game *Game, p *Player, o CardOpts) *Card {
 			}
 		}
 		return ""
+	}
+	var prev *Card
+	unique := true
+	for _, c := range game.suplist {
+		if isValid(c) == "" {
+			if prev != nil {
+				if prev != c {
+					unique = false
+					break
+				}
+			}
+			prev = c
+		}
+	}
+	if prev == nil {
+		return nil
+	}
+	if unique {
+		return prev
 	}
 	game.SetParse(func(b byte) (Command, string) {
 		var c *Card
@@ -725,7 +746,7 @@ func pickCard(game *Game, p *Player, o CardOpts) *Card {
 
 func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 	c := pickCard(game, game.p, CardOpts{cost: max, cond: fun})
-	game.Gain(game.p, c)
+	game.panickyGain(game.p, c)
 	return c
 }
 
@@ -1193,7 +1214,7 @@ func (game *Game) mainloop() {
 				}
 				fmt.Printf("%v buys %v for $%v\n", p.name, choice.name, game.Cost(choice))
 				game.Spend(choice)
-				game.Gain(p, choice)
+				game.panickyGain(p, choice)
 			case "play":
 				if err := game.CanPlay(p, cmd.c); err != "" {
 					panic(err)
