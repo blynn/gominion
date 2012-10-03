@@ -35,7 +35,7 @@ Nobles,6,Action-Victory,#2
 	Fun: map[string]func(game *Game){
 		"Courtyard": func(game *Game) {
 			p := game.p
-			for _, c := range game.pickHand(p, pickOpts{n: 1, exact: true}) {
+			for _, c := range game.pickHand(p, "1") {
 				fmt.Printf("%v decks %v\n", p.name, c.name)
 				p.deck = append(Pile{c}, p.deck...)
 			}
@@ -57,7 +57,7 @@ Nobles,6,Action-Victory,#2
 		},
 		"Secret Chamber": func(game *Game) {
 			p := game.p
-			game.c += len(game.DiscardList(p, game.pickHand(p, pickOpts{n: len(p.hand)})))
+			game.c += len(game.DiscardList(p, game.pickHand(p, "*")))
 		},
 		"Masquerade": func(game *Game) {
 			m := len(game.players)
@@ -65,7 +65,7 @@ Nobles,6,Action-Victory,#2
 			for i := 0; i < m; i++ {
 				j := (game.p.n + i) % m
 				p := game.players[j]
-				selected := game.pickHand(p, pickOpts{n: 1, exact: true})
+				selected := game.pickHand(p, "1")
 				if len(selected) > 0 {
 					a[j] = selected[0]
 				}
@@ -76,11 +76,11 @@ Nobles,6,Action-Victory,#2
 				left.hand.Add(a[i])
 				// TODO: Report the gained card.
 			}
-			game.TrashList(game.p, game.pickHand(game.p, pickOpts{n: 1}))
+			game.TrashList(game.p, game.pickHand(game.p, "1"))
 		},
 		"Shanty Town": func(game *Game) {
 			game.revealHand(game.p)
-			if !game.inHand(game.p, isAction) {
+			if !game.inHand(game.p, (*Card).IsAction) {
 				game.addCards(2)
 			}
 		},
@@ -93,7 +93,7 @@ Nobles,6,Action-Victory,#2
 				case 1:
 					game.c += 2
 				case 2:
-					game.TrashList(game.p, game.pickHand(game.p, pickOpts{n: 2, exact: true}))
+					game.TrashList(game.p, game.pickHand(game.p, "2"))
 				}
 			}
 		},
@@ -116,12 +116,7 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Baron": func(game *Game) {
-			selected := game.pickHand(game.p, pickOpts{n: 1, cond: func(c *Card) string {
-				if c.name != "Estate" {
-					return "must pick Estate"
-				}
-				return ""
-			}})
+			selected := game.pickHand(game.p, "1,card Estate")
 			if len(selected) == 0 {
 				game.MaybeGain(game.p, GetCard("Estate"))
 			} else {
@@ -144,10 +139,10 @@ Nobles,6,Action-Victory,#2
 		},
 		"Ironworks": func(game *Game) {
 			c := pickGain(game, 4)
-			if isAction(c) {
+			if c.IsAction() {
 				game.a++
 			}
-			if isTreasure(c) {
+			if c.IsTreasure() {
 				game.c++
 			}
 			if c.IsVictory() {
@@ -177,7 +172,7 @@ Nobles,6,Action-Victory,#2
 			}
 			for len(v) > 0 {
 				var selected Pile
-				selected, v = game.split(v, p, pickOpts{n: 1, exact: true})
+				selected, v = game.split(v, p, "1")
 				fmt.Printf("%v decks %v\n", p.name, selected[0].name)
 				p.deck = append(selected, p.deck...)
 			}
@@ -235,7 +230,7 @@ Nobles,6,Action-Victory,#2
 				v := game.getInts(other, "discard 2; gain Curse in hand", 1)
 				switch v[0] - 1 {
 				case 0:
-					game.DiscardList(other, game.pickHand(other, pickOpts{n: 2, exact: true}))
+					game.DiscardList(other, game.pickHand(other, "2"))
 				case 1:
 					game.MaybeGain(other, GetCard("Curse"))
 				}
@@ -255,10 +250,10 @@ Nobles,6,Action-Victory,#2
 				if c == prev {
 					break
 				}
-				if isAction(c) {
+				if c.IsAction() {
 					game.a += 2
 				}
-				if isTreasure(c) {
+				if c.IsTreasure() {
 					game.c += 2
 				}
 				if c.IsVictory() {
@@ -269,7 +264,7 @@ Nobles,6,Action-Victory,#2
 		},
 		"Trading Post": func(game *Game) {
 			p := game.p
-			selected := game.pickHand(p, pickOpts{n: 2, exact: true})
+			selected := game.pickHand(p, "2")
 			game.TrashList(p, selected)
 			if len(selected) == 2 && game.MaybeGain(p, GetCard("Silver")) {
 				n := len(p.discard)
@@ -279,7 +274,7 @@ Nobles,6,Action-Victory,#2
 		},
 		"Upgrade": func(game *Game) {
 			p := game.p
-			selected := game.pickHand(p, pickOpts{n: 1, exact: true})
+			selected := game.pickHand(p, "1")
 			if len(selected) == 0 {
 				return
 			}

@@ -47,7 +47,7 @@ func (this SimpleBuyer) start(game *Game, p *Player) {
 				panic("unreachable")
 			}
 			for k := len(p.hand) - 1; k >= 0; k-- {
-				if isTreasure(p.hand[k]) {
+				if p.hand[k].IsTreasure() {
 					return Command{s: "play", c: p.hand[k]}
 				}
 			}

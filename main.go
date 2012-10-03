@@ -57,11 +57,10 @@ var (
 
 var kTreasure, kVictory, kCurse, kAction, kReaction *Kind
 
-func isTreasure(c *Card) bool { return c.HasKind(kTreasure) }
-func isAction(c *Card) bool   { return c.HasKind(kAction) }
-func isReaction(c *Card) bool { return c.HasKind(kReaction) }
-
-func (c *Card) IsVictory() bool { return c.HasKind(kVictory) }
+func (c *Card) IsReaction() bool { return c.HasKind(kReaction) }
+func (c *Card) IsVictory() bool  { return c.HasKind(kVictory) }
+func (c *Card) IsTreasure() bool { return c.HasKind(kTreasure) }
+func (c *Card) IsAction() bool   { return c.HasKind(kAction) }
 
 func GetCard(s string) *Card {
 	c, ok := CardDict[s]
@@ -214,7 +213,7 @@ func (game *Game) keyToCard(key byte) *Card {
 
 func (game *Game) MultiPlay(p *Player, c *Card, m int) {
 	p.played.Add(c)
-	if isAction(c) {
+	if c.IsAction() {
 		game.aCount++
 	}
 	for ; m > 0; m-- {
@@ -243,7 +242,7 @@ func (game *Game) Play(c *Card) {
 	if k < 0 {
 		panic("unplayable")
 	}
-	if isAction(c) {
+	if c.IsAction() {
 		game.a--
 	}
 	game.MultiPlay(p, c, 1)
@@ -450,14 +449,14 @@ func (game *Game) CanPlay(p *Player, c *Card) string {
 		return "none in hand"
 	}
 	switch {
-	case isAction(c):
+	case c.IsAction():
 		if game.phase != phAction {
 			return "wrong phase"
 		}
 		if game.a == 0 {
 			return "out of actions"
 		}
-	case isTreasure(c):
+	case c.IsTreasure():
 		if game.phase != phBuy {
 			return "wrong phase"
 		}
@@ -524,116 +523,13 @@ func (game *Game) getCommand(p *Player) Command {
 	return cmd
 }
 
-type pickOpts struct {
-	n     int
-	exact bool
-	cond  func(*Card) string
-}
-
-func (game *Game) pickHand(p *Player, o pickOpts) Pile {
+func (game *Game) pickHand(p *Player, s string) Pile {
 	var selected Pile
-	selected, p.hand = game.split(p.hand, p, o)
+	selected, p.hand = game.split(p.hand, p, s)
 	return selected
 }
 
-func (game *Game) pickHandNG(p *Player, s string) Pile {
-	var selected Pile
-	selected, p.hand = game.splitNG(p.hand, p, s)
-	return selected
-}
-
-func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
-	n := o.n
-	var in, out Pile
-	out.Add(list...)
-	// Forced choices.
-	if game.isServer {
-		max := 0
-		var prev *Card
-		same := true
-		for _, c := range out {
-			if o.cond == nil || o.cond(c) == "" {
-				max++
-				if prev == nil {
-					prev = c
-				} else if prev != c {
-					same = false
-				}
-			}
-		}
-		if n > max {
-			n = max
-		}
-		if same && o.exact {
-			log.Print("TODO: automate forced choice")
-		}
-		game.cast("max", n)
-	} else {
-		n = PanickyAtoi(game.fetch()[0])
-	}
-	if n == 0 {
-		return in, out
-	}
-	game.SetParse(func(b byte) (Command, string) {
-		if b == '.' {
-			if o.exact {
-				return errCmd, "must pick a card"
-			}
-			return Command{s: "done"}, ""
-		}
-		choice := game.keyToCard(b)
-		if choice == nil {
-			return errCmd, "unrecognized card"
-		}
-		found := false
-		for _, c := range out {
-			if c == choice {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return errCmd, "invalid choice"
-		}
-		if o.cond != nil {
-			if msg := o.cond(choice); msg != "" {
-				return errCmd, msg
-			}
-		}
-		return Command{s: "pick", c: choice}, ""
-	})
-	for stop := false; !stop; {
-		cmd := game.getCommand(p)
-		switch cmd.s {
-		case "pick":
-			found := false
-			for i, c := range out {
-				// nil represents unknown cards.
-				if c == nil || c == cmd.c {
-					in.Add(cmd.c)
-					out = append(out[:i], out[i+1:]...)
-					n--
-					found = true
-					break
-				}
-			}
-			if !found {
-				panic("invalid selection")
-			}
-			stop = n == 0
-		case "done":
-			if o.exact && n > 0 {
-				panic("must pick more")
-			}
-			stop = true
-		default:
-			panic("bad command: " + cmd.s)
-		}
-	}
-	return in, out
-}
-
-func (game *Game) splitNG(list Pile, p *Player, fmt string) (Pile, Pile) {
+func (game *Game) split(list Pile, p *Player, fmt string) (Pile, Pile) {
 	v := strings.Split(fmt, ",")
 	num := v[0]
 	exact := true
@@ -641,13 +537,22 @@ func (game *Game) splitNG(list Pile, p *Player, fmt string) (Pile, Pile) {
 		exact = false
 		num = num[:len(num)-1]
 	}
-	n := PanickyAtoi(num)
+	n := 0
+	if num[0] == '*' {
+		n = len(list)
+		exact = false
+	} else {
+		n = PanickyAtoi(num)
+	}
 	var in, out Pile
 	out.Add(list...)
 	satisfied := func(fn string, c *Card) bool {
-		// TODO: Use reflection?
-		if fn == "IsVictory" {
-			return c.IsVictory()
+		v := strings.Split(fn, " ")
+		switch v[0] {
+		case "kind":
+			return c.HasKind(KindDict[v[1]])
+		case "card":
+			return c == GetCard(v[1])
 		}
 		panic("unreachable")
 	}
@@ -852,16 +757,11 @@ func (game *Game) inHand(p *Player, cond func(*Card) bool) bool {
 }
 
 func reacts(game *Game, p *Player) bool {
-	if !game.inHand(p, isReaction) {
+	if !game.inHand(p, (*Card).IsReaction) {
 		return false
 	}
 	var selected Pile
-	selected, _ = game.split(p.hand, p, pickOpts{n: 1, cond: func(c *Card) string {
-		if !isReaction(c) {
-			return "pick Reaction"
-		}
-		return ""
-	}})
+	selected, _ = game.split(p.hand, p, "1-,kind Reaction")
 	if len(selected) == 0 {
 		return false
 	}
@@ -872,7 +772,7 @@ func reacts(game *Game, p *Player) bool {
 		return true
 	case "Secret Chamber":
 		game.draw(p, 2)
-		selected := game.pickHand(p, pickOpts{n: 2, exact: true})
+		selected := game.pickHand(p, "2")
 		fmt.Printf("%v decks %v cards\n", p.name, len(selected))
 		p.deck = append(selected, p.deck...)
 		return false
@@ -1419,12 +1319,12 @@ func (consoleGamer) start(game *Game, p *Player) {
 				frame := game.StackTop()
 				if frame == nil {
 					// Automatically advance to next phase when it's obvious.
-					if game.phase == phAction && !p.inHand(isAction) {
+					if game.phase == phAction && !p.inHand((*Card).IsAction) {
 						return Command{s: "next"}
 					}
 					if game.phase != phBuy {
 						buyMode = false
-					} else if !p.inHand(isTreasure) {
+					} else if !p.inHand((*Card).IsTreasure) {
 						buyMode = true
 					}
 				}
@@ -1433,7 +1333,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 					if wildCard {
 						if game.phase == phBuy {
 							for k := len(p.hand) - 1; k >= 0; k-- {
-								if isTreasure(p.hand[k]) {
+								if p.hand[k].IsTreasure() {
 									return Command{s: "play", c: p.hand[k]}
 								}
 							}
@@ -1490,7 +1390,7 @@ func (consoleGamer) start(game *Game, p *Player) {
 								msg = "wrong phase"
 								break
 							}
-							if p.inHand(isTreasure) {
+							if p.inHand((*Card).IsTreasure) {
 								buyMode = !buyMode
 							}
 						case '.':

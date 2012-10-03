@@ -43,10 +43,10 @@ Adventurer,6,Action
 	Fun: map[string]func(game *Game){
 		"Cellar": func(game *Game) {
 			p := game.p
-			game.draw(p, len(game.DiscardList(p, game.pickHand(p, pickOpts{n: len(p.hand)}))))
+			game.draw(p, len(game.DiscardList(p, game.pickHand(p, "*"))))
 		},
 		"Chapel": func(game *Game) {
-			game.TrashList(game.p, game.pickHandNG(game.p, "4-"))
+			game.TrashList(game.p, game.pickHand(game.p, "4-"))
 		},
 		"Chancellor": func(game *Game) {
 			p := game.p
@@ -64,12 +64,13 @@ Adventurer,6,Action
 				p.discard = p.discard[:n-1]
 			}
 			game.attack(func(other *Player) {
-				selected := game.pickHandNG(other, "1,IsVictory")
+				selected := game.pickHand(other, "1,kind Victory")
 				if len(selected) == 0 {
 					game.revealHand(other)
 					return
 				}
 				fmt.Printf("%v decks %v\n", other.name, selected[0].name)
+				other.deck = append(selected, other.deck...)
 			})
 		},
 		"Feast": func(game *Game) {
@@ -85,7 +86,7 @@ Adventurer,6,Action
 					return
 				}
 				var lost Pile
-				other.hand, lost = game.split(other.hand, other, pickOpts{n: 3, exact: true})
+				other.hand, lost = game.split(other.hand, other, "3")
 				game.DiscardList(other, lost)
 			})
 		},
@@ -117,7 +118,7 @@ Adventurer,6,Action
 		},
 		"Remodel": func(game *Game) {
 			p := game.p
-			selected := game.pickHand(p, pickOpts{n: 1, exact: true})
+			selected := game.pickHand(p, "1")
 			if len(selected) > 0 {
 				game.TrashCard(p, selected[0])
 				pickGain(game, game.Cost(selected[0])+2)
@@ -143,7 +144,7 @@ Adventurer,6,Action
 				for i := 0; i < 2 && other.MaybeShuffle(); i++ {
 					c := game.reveal(other)
 					other.deck = other.deck[1:]
-					if isTreasure(c) {
+					if c.IsTreasure() {
 						loot.Add(c)
 					} else {
 						junk.Add(c)
@@ -151,12 +152,7 @@ Adventurer,6,Action
 				}
 				if len(loot) > 1 {
 					var rest Pile
-					loot, rest = game.split(loot, p, pickOpts{n: 1, exact: true, cond: func(c *Card) string {
-						if !isTreasure(c) {
-							return "must pick Treasure"
-						}
-						return ""
-					}})
+					loot, rest = game.split(loot, p, "1,kind Treasure")
 					junk.Add(rest...)
 				}
 				if len(loot) > 0 {
@@ -170,12 +166,7 @@ Adventurer,6,Action
 			})
 		},
 		"Throne Room": func(game *Game) {
-			selected := game.pickHand(game.p, pickOpts{n: 1, exact: true, cond: func(c *Card) string {
-				if !isAction(c) {
-					return "must pick Action"
-				}
-				return ""
-			}})
+			selected := game.pickHand(game.p, "1,kind Action")
 			if len(selected) > 0 {
 				game.MultiPlay(game.p, selected[0], 2)
 			}
@@ -191,7 +182,7 @@ Adventurer,6,Action
 				if game.isServer {
 					c := p.hand[len(p.hand)-1]
 					cmd := "done"
-					if isAction(c) {
+					if c.IsAction() {
 						mustAsk = true
 						cmd = "yes"
 					}
@@ -217,12 +208,12 @@ Adventurer,6,Action
 		"Mine": func(game *Game) {
 			p := game.p
 			f := func(c *Card) string {
-				if !isTreasure(c) {
+				if !c.IsTreasure() {
 					return "must pick Treasure"
 				}
 				return ""
 			}
-			selected := game.pickHand(p, pickOpts{n: 1, exact: true, cond: f})
+			selected := game.pickHand(p, "1,kind Treasure")
 			if len(selected) == 0 {
 				return
 			}
@@ -239,7 +230,7 @@ Adventurer,6,Action
 			p := game.p
 			for n := 2; n > 0 && p.MaybeShuffle(); {
 				c := game.reveal(p)
-				if isTreasure(c) {
+				if c.IsTreasure() {
 					fmt.Printf("%v puts %v in hand\n", p.name, c.name)
 					p.hand.Add(c)
 					n--
