@@ -11,7 +11,7 @@ func (this SimpleBuyer) start(game *Game, p *Player) {
 			switch frame.card.name {
 			case "Bureaucrat":
 				for _, c := range p.hand {
-					if isVictory(c) {
+					if c.IsVictory() {
 						game.ch <- Command{s: "pick", c: c}
 						break
 					}

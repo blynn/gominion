@@ -150,7 +150,7 @@ Nobles,6,Action-Victory,#2
 			if isTreasure(c) {
 				game.c++
 			}
-			if isVictory(c) {
+			if c.IsVictory() {
 				game.addCards(1)
 			}
 		},
@@ -167,7 +167,7 @@ Nobles,6,Action-Victory,#2
 			var v Pile
 			for n := 0; n < 4 && p.MaybeShuffle(); n++ {
 				c := game.reveal(p)
-				if isVictory(c) {
+				if c.IsVictory() {
 					fmt.Printf("%v puts %v in hand\n", p.name, c.name)
 					p.hand.Add(c)
 				} else {
@@ -261,7 +261,7 @@ Nobles,6,Action-Victory,#2
 				if isTreasure(c) {
 					game.c += 2
 				}
-				if isVictory(c) {
+				if c.IsVictory() {
 					game.addCards(2)
 				}
 				prev = c

@@ -46,7 +46,7 @@ Adventurer,6,Action
 			game.draw(p, len(game.DiscardList(p, game.pickHand(p, pickOpts{n: len(p.hand)}))))
 		},
 		"Chapel": func(game *Game) {
-			game.TrashList(game.p, game.pickHand(game.p, pickOpts{n: 4}))
+			game.TrashList(game.p, game.pickHandNG(game.p, "4-"))
 		},
 		"Chancellor": func(game *Game) {
 			p := game.p
@@ -64,12 +64,7 @@ Adventurer,6,Action
 				p.discard = p.discard[:n-1]
 			}
 			game.attack(func(other *Player) {
-				selected := game.pickHand(other, pickOpts{n: 1, exact: true, cond: func(c *Card) string {
-					if !isVictory(c) {
-						return "must pick Victory card"
-					}
-					return ""
-				}})
+				selected := game.pickHandNG(other, "1,IsVictory")
 				if len(selected) == 0 {
 					game.revealHand(other)
 					return

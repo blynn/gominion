@@ -57,10 +57,11 @@ var (
 
 var kTreasure, kVictory, kCurse, kAction, kReaction *Kind
 
-func isVictory(c *Card) bool  { return c.HasKind(kVictory) }
 func isTreasure(c *Card) bool { return c.HasKind(kTreasure) }
 func isAction(c *Card) bool   { return c.HasKind(kAction) }
 func isReaction(c *Card) bool { return c.HasKind(kReaction) }
+
+func (c *Card) IsVictory() bool { return c.HasKind(kVictory) }
 
 func GetCard(s string) *Card {
 	c, ok := CardDict[s]
@@ -489,7 +490,7 @@ func (game *Game) Over() {
 			count, pts int
 		})
 		for _, c := range p.manifest {
-			if isVictory(c) || c.HasKind(kCurse) {
+			if c.IsVictory() || c.HasKind(kCurse) {
 				if c.vp == nil {
 					fmt.Printf("%v unimplemented  :(\n", c.name)
 					continue
@@ -504,7 +505,7 @@ func (game *Game) Over() {
 		}
 		fmt.Printf("%v: %v\n", p.name, score)
 		for _, c := range game.suplist {
-			if isVictory(c) || c.HasKind(kCurse) {
+			if c.IsVictory() || c.HasKind(kCurse) {
 				v := m[c]
 				fmt.Printf("%v x %v = %v\n", v.count, c.name, v.pts)
 			}
@@ -532,6 +533,12 @@ type pickOpts struct {
 func (game *Game) pickHand(p *Player, o pickOpts) Pile {
 	var selected Pile
 	selected, p.hand = game.split(p.hand, p, o)
+	return selected
+}
+
+func (game *Game) pickHandNG(p *Player, s string) Pile {
+	var selected Pile
+	selected, p.hand = game.splitNG(p.hand, p, s)
 	return selected
 }
 
@@ -616,6 +623,118 @@ func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 			stop = n == 0
 		case "done":
 			if o.exact && n > 0 {
+				panic("must pick more")
+			}
+			stop = true
+		default:
+			panic("bad command: " + cmd.s)
+		}
+	}
+	return in, out
+}
+
+func (game *Game) splitNG(list Pile, p *Player, fmt string) (Pile, Pile) {
+	v := strings.Split(fmt, ",")
+	num := v[0]
+	exact := true
+	if num[len(num)-1] == '-' {
+		exact = false
+		num = num[:len(num)-1]
+	}
+	n := PanickyAtoi(num)
+	var in, out Pile
+	out.Add(list...)
+	satisfied := func(fn string, c *Card) bool {
+		// TODO: Use reflection?
+		if fn == "IsVictory" {
+			return c.IsVictory()
+		}
+		panic("unreachable")
+	}
+	if game.isServer {
+		max := 0
+		var prev *Card
+		same := true
+		for _, c := range out {
+			ok := true
+			for _, fn := range v[1:] {
+				if !satisfied(fn, c) {
+					ok = false
+					break
+				}
+			}
+			if !ok {
+				continue
+			}
+			max++
+			if prev == nil {
+				prev = c
+			} else if prev != c {
+				same = false
+			}
+		}
+		if n > max {
+			n = max
+		}
+		if same && exact {
+			log.Print("TODO: automate forced choice")
+		}
+		game.cast("max", n)
+	} else {
+		n = PanickyAtoi(game.fetch()[0])
+	}
+	if n == 0 {
+		return in, out
+	}
+	game.SetParse(func(b byte) (Command, string) {
+		if b == '.' {
+			if exact {
+				return errCmd, "must pick a card"
+			}
+			return Command{s: "done"}, ""
+		}
+		choice := game.keyToCard(b)
+		if choice == nil {
+			return errCmd, "unrecognized card"
+		}
+		found := false
+		for _, c := range out {
+			if c == choice {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errCmd, "invalid choice"
+		}
+		for _, fn := range v[1:] {
+			if !satisfied(fn, choice) {
+				return errCmd, "invalid choice"
+			}
+		}
+		return Command{s: "pick", c: choice}, ""
+	})
+	for stop := false; !stop; {
+		cmd := game.getCommand(p)
+		switch cmd.s {
+		case "pick":
+			found := false
+			for i, c := range out {
+				// nil represents unknown cards.
+				if c == nil || c == cmd.c {
+					in.Add(cmd.c)
+					out = append(out[:i], out[i+1:]...)
+					n--
+					found = true
+					break
+				}
+			}
+			if !found {
+				panic("invalid selection")
+			}
+			stop = n == 0
+		case "done":
+			if exact && n > 0 {
 				panic("must pick more")
 			}
 			stop = true
@@ -1124,7 +1243,7 @@ func singleGame(game *Game) {
 	keys := "asdfgzxcvb"
 
 	for i, c := range pr.cards {
-		if isVictory(c) {
+		if c.IsVictory() {
 			c.supply = numVictoryCards
 		} else {
 			c.supply = 10
