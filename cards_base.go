@@ -51,15 +51,16 @@ Adventurer,6,Action
 		"Chancellor": func(game *Game) {
 			p := game.p
 			if len(p.deck) > 0 && game.getBool(p, "discard deck?") {
-				p.discard, p.deck = append(p.discard, p.deck...), nil
+				p.discard.Add(p.deck...)
 				game.Report(Event{s: "discarddeck", n: p.n, i: len(p.deck)})
+				p.deck = nil
 			}
 		},
 		"Bureaucrat": func(game *Game) {
 			p := game.p
 			if game.MaybeGain(p, GetCard("Silver")) {
 				n := len(p.discard)
-				p.deck = append(p.discard[n-1:n], p.deck...)
+				p.deck = append(Pile{p.discard[n-1]}, p.deck...)
 				p.discard = p.discard[:n-1]
 			}
 			game.attack(func(other *Player) {
@@ -78,7 +79,7 @@ Adventurer,6,Action
 		},
 		"Feast": func(game *Game) {
 			p := game.p
-			game.trash = append(game.trash, p.played[len(p.played)-1])
+			game.trash.Add(p.played[len(p.played)-1])
 			p.played = p.played[:len(p.played)-1]
 			pickGain(game, 5)
 		},
@@ -148,9 +149,9 @@ Adventurer,6,Action
 					c := game.reveal(other)
 					other.deck = other.deck[1:]
 					if isTreasure(c) {
-						loot = append(loot, c)
+						loot.Add(c)
 					} else {
-						junk = append(junk, c)
+						junk.Add(c)
 					}
 				}
 				if len(loot) > 1 {
@@ -161,7 +162,7 @@ Adventurer,6,Action
 						}
 						return ""
 					}})
-					junk = append(junk, rest...)
+					junk.Add(rest...)
 				}
 				if len(loot) > 0 {
 					c := loot[0]
@@ -213,10 +214,10 @@ Adventurer,6,Action
 					}
 					fmt.Printf("%v sets aside %v\n", p.name, c.name)
 					p.hand = p.hand[:len(p.hand)-1]
-					v = append(v, c)
+					v.Add(c)
 				}
 			}
-			p.discard = append(p.discard, v...)
+			game.DiscardList(p, v)
 		},
 		"Mine": func(game *Game) {
 			p := game.p
@@ -233,7 +234,7 @@ Adventurer,6,Action
 			game.TrashCard(p, selected[0])
 			choice := pickGainCond(game, game.Cost(selected[0])+3, f)
 			fmt.Printf("%v puts %v into hand\n", p.name, choice.name)
-			p.hand = append(p.hand, choice)
+			p.hand.Add(choice)
 			p.discard = p.discard[:len(p.discard)-1]
 		},
 		"Witch": func(game *Game) {
@@ -245,7 +246,7 @@ Adventurer,6,Action
 				c := game.reveal(p)
 				if isTreasure(c) {
 					fmt.Printf("%v puts %v in hand\n", p.name, c.name)
-					p.hand = append(p.hand, c)
+					p.hand.Add(c)
 					n--
 				} else {
 					game.DiscardList(p, Pile{c})

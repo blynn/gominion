@@ -13,11 +13,9 @@ func (this SimpleBuyer) start(game *Game, p *Player) {
 				for _, c := range p.hand {
 					if isVictory(c) {
 						game.ch <- Command{s: "pick", c: c}
-						<-p.trigger
 						break
 					}
 				}
-				panic("unreachable")
 			case "Militia":
 				// Keep first 3 cards.
 				for i := 0; i < 3; i++ {

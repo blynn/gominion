@@ -79,12 +79,16 @@ func (deck Pile) shuffle() {
 	deck[1:].shuffle()
 }
 
-func (deck *Pile) Add(s string) {
+func (deck *Pile) AddCard(s string) {
 	c, ok := CardDict[s]
 	if !ok {
 		panic("no such card: " + s)
 	}
-	*deck = append(*deck, c)
+	deck.Add(c)
+}
+
+func (deck *Pile) Add(c ...*Card) {
+	*deck = append(*deck, c...)
 }
 
 type Game struct {
@@ -116,7 +120,7 @@ const (
 )
 
 func (game *Game) TrashCard(p *Player, c *Card) {
-	game.trash = append(game.trash, c)
+	game.trash.Add(c)
 	game.Report(Event{s: "trash", n: p.n, card: c})
 }
 
@@ -128,7 +132,7 @@ func (game *Game) TrashList(p *Player, list Pile) {
 
 func (game *Game) DiscardList(p *Player, list Pile) Pile {
 	if len(list) > 0 {
-		p.discard = append(p.discard, list...)
+		p.discard.Add(list...)
 		game.Report(Event{s: "discard", n: p.n, i: len(list)})
 	}
 	return list
@@ -169,10 +173,10 @@ func (game *Game) dump() {
 func (p *Player) InitDeck() {
 	p.manifest = nil
 	for i := 0; i < 3; i++ {
-		p.manifest.Add("Estate")
+		p.manifest.AddCard("Estate")
 	}
 	for i := 0; i < 7; i++ {
-		p.manifest.Add("Copper")
+		p.manifest.AddCard("Copper")
 	}
 }
 
@@ -208,7 +212,7 @@ func (game *Game) keyToCard(key byte) *Card {
 }
 
 func (game *Game) MultiPlay(p *Player, c *Card, m int) {
-	p.played = append(p.played, c)
+	p.played.Add(c)
 	if isAction(c) {
 		game.aCount++
 	}
@@ -354,9 +358,9 @@ func (game *Game) draw(p *Player, n int) int {
 				}
 				p.deck = p.deck[1:]
 				if b != '?' {
-					p.hand = append(p.hand, game.keyToCard(b))
+					p.hand.Add(game.keyToCard(b))
 				} else {
-					p.hand = append(p.hand, nil)
+					p.hand.Add(nil)
 				}
 			}
 			count = len(w[0])
@@ -395,8 +399,9 @@ func (game *Game) revealHand(p *Player) {
 }
 
 func (game *Game) Cleanup(p *Player) {
-	p.discard, p.played = append(p.discard, p.played...), nil
-	p.discard, p.hand = append(p.discard, p.hand...), nil
+	p.discard.Add(p.played...)
+	p.discard.Add(p.hand...)
+	p.played, p.hand = nil, nil
 }
 
 func (game *Game) cast(comment string, vs ...interface{}) {
@@ -533,7 +538,7 @@ func (game *Game) pickHand(p *Player, o pickOpts) Pile {
 func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 	n := o.n
 	var in, out Pile
-	out = append(out, list...)
+	out.Add(list...)
 	// Forced choices.
 	if game.isServer {
 		max := 0
@@ -598,7 +603,7 @@ func (game *Game) split(list Pile, p *Player, o pickOpts) (Pile, Pile) {
 			for i, c := range out {
 				// nil represents unknown cards.
 				if c == nil || c == cmd.c {
-					in = append(in, cmd.c)
+					in.Add(cmd.c)
 					out = append(out[:i], out[i+1:]...)
 					n--
 					found = true
@@ -626,7 +631,7 @@ func (game *Game) Gain(p *Player, c *Card) {
 		panic("out of supply")
 	}
 	game.Report(Event{s: "gain", n: p.n, card: c})
-	p.discard = append(p.discard, c)
+	p.discard.Add(c)
 	c.supply--
 }
 

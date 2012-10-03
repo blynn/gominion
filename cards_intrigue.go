@@ -73,7 +73,7 @@ Nobles,6,Action-Victory,#2
 			for i := 0; i < m; i++ {
 				j := (i + 1) % m
 				left := game.players[j]
-				left.hand = append(left.hand, a[i])
+				left.hand.Add(a[i])
 				// TODO: Report the gained card.
 			}
 			game.TrashList(game.p, game.pickHand(game.p, pickOpts{n: 1}))
@@ -111,7 +111,7 @@ Nobles,6,Action-Victory,#2
 			c := pickCard(game, p, CardOpts{any: true})
 			if c == game.reveal(p) {
 				fmt.Printf("%v puts %v in hand\n", p.name, c.name)
-				p.hand = append(p.hand, c)
+				p.hand.Add(c)
 				p.deck = p.deck[1:]
 			}
 		},
@@ -157,7 +157,7 @@ Nobles,6,Action-Victory,#2
 		"Mining Village": func(game *Game) {
 			p := game.p
 			if game.getBool(p, "trash for $2?") {
-				game.trash = append(game.trash, p.played[len(p.played)-1])
+				game.trash.Add(p.played[len(p.played)-1])
 				p.played = p.played[:len(p.played)-1]
 				game.c += 2
 			}
@@ -169,9 +169,9 @@ Nobles,6,Action-Victory,#2
 				c := game.reveal(p)
 				if isVictory(c) {
 					fmt.Printf("%v puts %v in hand\n", p.name, c.name)
-					p.hand = append(p.hand, c)
+					p.hand.Add(c)
 				} else {
-					v = append(v, c)
+					v.Add(c)
 				}
 				p.deck = p.deck[1:]
 			}
@@ -216,7 +216,7 @@ Nobles,6,Action-Victory,#2
 					if game.Cost(c) >= 3 {
 						break
 					}
-					v = append(v, c)
+					v.Add(c)
 				}
 				if c != nil {
 					game.TrashCard(other, c)
@@ -273,7 +273,7 @@ Nobles,6,Action-Victory,#2
 			game.TrashList(p, selected)
 			if len(selected) == 2 && game.MaybeGain(p, GetCard("Silver")) {
 				n := len(p.discard)
-				p.hand = append(p.hand, p.discard[n-1])
+				p.hand.Add(p.discard[n-1])
 				p.discard = p.discard[:n-1]
 			}
 		},
