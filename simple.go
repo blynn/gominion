@@ -19,8 +19,10 @@ func (this SimpleBuyer) start(game *Game, p *Player) {
 			case "Militia":
 				// Keep first 3 cards.
 				for i := 0; i < 3; i++ {
+					if i > 0 {
+						<-p.trigger
+					}
 					game.ch <- Command{s: "pick", c: p.hand[i]}
-					<-p.trigger
 				}
 			case "Masquerade":
 				// Throw away first card.

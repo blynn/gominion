@@ -545,30 +545,30 @@ func (game *Game) split(list Pile, p *Player, fmt string) (Pile, Pile) {
 		n = PanickyAtoi(num)
 	}
 	var in, out Pile
-	out.Add(list...)
-	satisfied := func(fn string, c *Card) bool {
-		v := strings.Split(fn, " ")
-		switch v[0] {
-		case "kind":
-			return c.HasKind(KindDict[v[1]])
-		case "card":
-			return c == GetCard(v[1])
+	satisfied := func(fns []string, c *Card) bool {
+		for _, fn := range fns {
+			v := strings.Split(fn, " ")
+			switch v[0] {
+			default:
+				panic(v[0])
+			case "kind":
+				if !c.HasKind(KindDict[v[1]]) {
+					return false
+				}
+			case "card":
+				if c != GetCard(v[1]) {
+					return false
+				}
+			}
 		}
-		panic("unreachable")
+		return true
 	}
 	if game.isServer {
 		max := 0
 		var prev *Card
 		same := true
-		for _, c := range out {
-			ok := true
-			for _, fn := range v[1:] {
-				if !satisfied(fn, c) {
-					ok = false
-					break
-				}
-			}
-			if !ok {
+		for _, c := range list {
+			if !satisfied(v[1:], c) {
 				continue
 			}
 			max++
@@ -582,15 +582,24 @@ func (game *Game) split(list Pile, p *Player, fmt string) (Pile, Pile) {
 			n = max
 		}
 		if same && exact {
-			log.Print("TODO: automate forced choice")
+			for _, c := range list {
+				if n > 0 && c == prev {
+					in.Add(c)
+					n--
+				} else {
+					out.Add(c)
+				}
+			}
+			return in, out
 		}
 		game.cast("max", n)
 	} else {
 		n = PanickyAtoi(game.fetch()[0])
 	}
 	if n == 0 {
-		return in, out
+		return in, list
 	}
+	out.Add(list...)
 	game.SetParse(func(b byte) (Command, string) {
 		if b == '.' {
 			if exact {
@@ -612,10 +621,8 @@ func (game *Game) split(list Pile, p *Player, fmt string) (Pile, Pile) {
 		if !found {
 			return errCmd, "invalid choice"
 		}
-		for _, fn := range v[1:] {
-			if !satisfied(fn, choice) {
-				return errCmd, "invalid choice"
-			}
+		if !satisfied(v[1:], choice) {
+			return errCmd, "invalid choice"
 		}
 		return Command{s: "pick", c: choice}, ""
 	})

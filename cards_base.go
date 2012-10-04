@@ -92,29 +92,12 @@ Adventurer,6,Action
 		},
 		"Moneylender": func(game *Game) {
 			p := game.p
-			cardCopper := GetCard("Copper")
-			copper := 0
-			if game.isServer {
-				for _, c := range p.hand {
-					if c == cardCopper {
-						copper = 1
-						break
-					}
-				}
-				game.cast("moneylender", copper)
-			} else {
-				copper = PanickyAtoi(game.fetch()[0])
+			selected := game.pickHand(p, "1,card Copper")
+			if len(selected) == 0 {
+				return
 			}
-			if copper == 1 {
-				for i, c := range p.hand {
-					if c == nil || c == cardCopper {
-						p.hand = append(p.hand[:i], p.hand[i+1:]...)
-						game.TrashCard(p, cardCopper)
-						game.c += 3
-						break
-					}
-				}
-			}
+			game.TrashCard(p, selected[0])
+			game.c += 3
 		},
 		"Remodel": func(game *Game) {
 			p := game.p
