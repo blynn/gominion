@@ -41,19 +41,12 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Pawn": func(game *Game) {
-			v := game.getInts(game.p, "+1 Card; +1 Action; +1 Buy; +$1", 2)
-			for _, i := range v {
-				switch i - 1 {
-				case 0:
-					game.addCards(1)
-				case 1:
-					game.a++
-				case 2:
-					game.b++
-				case 3:
-					game.c++
-				}
-			}
+			game.Choose(game.p, 2, []NameFun{
+				{"+1 Card", func() { game.addCards(1) }},
+				{"+1 Action", func() { game.a++ }},
+				{"+1 Buy", func() { game.b++ }},
+				{"+$1", func() { game.c++ }},
+			})
 		},
 		"Secret Chamber": func(game *Game) {
 			p := game.p
@@ -85,17 +78,13 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Steward": func(game *Game) {
-			v := game.getInts(game.p, "+2 Cards; +$2; trash 2 from hand", 1)
-			for _, i := range v {
-				switch i - 1 {
-				case 0:
-					game.addCards(2)
-				case 1:
-					game.c += 2
-				case 2:
+			game.Choose(game.p, 1, []NameFun{
+				{"+2 Cards", func() { game.addCards(2) }},
+				{"+$2", func() { game.c += 2 }},
+				{"trash 2 from hand", func() {
 					game.TrashList(game.p, game.pickHand(game.p, "2"))
-				}
-			}
+				}},
+			})
 		},
 		"Swindler": func(game *Game) {
 			game.attack(func(other *Player) {
@@ -183,13 +172,10 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Minion": func(game *Game) {
-			v := game.getInts(game.p, "+$2; discard hand, +4 Cards", 1)
-			for _, i := range v {
-				switch i - 1 {
-				case 0:
-					game.c += 2
-				case 1:
-					p := game.p
+			p := game.p
+			game.Choose(p, 1, []NameFun{
+				{"+$2", func() { game.c += 2 }},
+				{"discard hand, +4 Cards", func() {
 					game.DiscardList(p, p.hand)
 					p.hand = nil
 					game.addCards(4)
@@ -200,8 +186,8 @@ Nobles,6,Action-Victory,#2
 							game.draw(other, 4)
 						}
 					})
-				}
-			}
+				}},
+			})
 		},
 		"Saboteur": func(game *Game) {
 			game.attack(func(other *Player) {
@@ -229,13 +215,10 @@ Nobles,6,Action-Victory,#2
 		},
 		"Torturer": func(game *Game) {
 			game.attack(func(other *Player) {
-				v := game.getInts(other, "discard 2; gain Curse in hand", 1)
-				switch v[0] - 1 {
-				case 0:
-					game.DiscardList(other, game.pickHand(other, "2"))
-				case 1:
-					game.MaybeGain(other, GetCard("Curse"))
-				}
+				game.Choose(other, 1, []NameFun{
+					{"discard 2", func() { game.DiscardList(other, game.pickHand(other, "2")) }},
+					{"gain Curse in hand", func() { game.MaybeGain(other, GetCard("Curse")) }},
+				})
 			})
 		},
 		"Tribute": func(game *Game) {
@@ -284,15 +267,10 @@ Nobles,6,Action-Victory,#2
 			game.MaybeGain(p, pickCard(game, p, CardOpts{cost: game.Cost(selected[0]) + 1, exact: true}))
 		},
 		"Nobles": func(game *Game) {
-			v := game.getInts(game.p, "+3 Cards; +2 Actions", 1)
-			for _, i := range v {
-				switch i - 1 {
-				case 0:
-					game.addCards(3)
-				case 1:
-					game.a += 2
-				}
-			}
+			game.Choose(game.p, 1, []NameFun{
+				{"+3 Cards", func() { game.addCards(3) }},
+				{"+2 Actions", func() { game.a += 2 }},
+			})
 		},
 	},
 	VP: map[string]func(game *Game) int{
@@ -315,4 +293,35 @@ Deconstruction:Bridge,Mining Village,Remodel,Saboteur,Secret Chamber,Spy,Swindle
 Hand Madness:Bureaucrat,Chancellor,Council Room,Courtyard,Mine,Militia,Minion,Nobles,Steward,Torturer
 Underlings:Baron,Cellar,Festival,Library,Masquerade,Minion,Nobles,Pawn,Steward,Witch
 `,
+}
+
+type NameFun struct {
+	name string
+	fun  func()
+}
+
+func (game *Game) Choose(p *Player, n int, nfs []NameFun) {
+	for i, nf := range nfs {
+		fmt.Printf("[%d] %v\n", i+1, nf.name)
+	}
+	var selection []int
+	game.SetParse(func(b byte) (Command, string) {
+		if b < '1' || b > '0'+byte(len(nfs)) {
+			i := int(b - '1')
+			for _, x := range selection {
+				if x == i {
+					return errCmd, "already chosen " + string(b)
+				}
+			}
+			return errCmd, "enter digit within range"
+		}
+		return Command{s: string(b)}, ""
+	})
+	for len(selection) < n {
+		cmd := game.getCommand(p)
+		selection = append(selection, int(cmd.s[0]-'1'))
+	}
+	for _, v := range selection {
+		nfs[v].fun()
+	}
 }

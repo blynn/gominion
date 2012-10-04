@@ -826,33 +826,6 @@ func (game *Game) attack(fun func(*Player)) {
 	})
 }
 
-func (game *Game) getInts(p *Player, menu string, n int) []int {
-	v := strings.Split(menu, ";")
-	for i, s := range v {
-		v[i] = strings.TrimSpace(s)
-		fmt.Printf("[%d] %v\n", i+1, v[i])
-	}
-	var selection []int
-	game.SetParse(func(b byte) (Command, string) {
-		if b < '1' || b > '0'+byte(len(v)) {
-			i := int(b - '0')
-			log.Printf("%d", i)
-			for _, x := range selection {
-				if x == i {
-					return errCmd, "already chosen " + string(b)
-				}
-			}
-			return errCmd, "enter digit within range"
-		}
-		return Command{s: string(b)}, ""
-	})
-	for len(selection) < n {
-		cmd := game.getCommand(p)
-		selection = append(selection, int(cmd.s[0]-'0'))
-	}
-	return selection
-}
-
 func (game *Game) getBool(p *Player, prompt string) bool {
 	game.SetParse2(prompt, func(b byte) (Command, string) {
 		switch b {
