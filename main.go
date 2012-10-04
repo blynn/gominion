@@ -258,13 +258,9 @@ func (game *Game) addActions(n int) { game.a += n }
 func (game *Game) addBuys(n int)    { game.b += n }
 func (game *Game) addCards(n int)   { game.draw(game.p, n) }
 
-func (game *Game) SetParse2(prompt string, fun func(b byte) (Command, string)) {
+func (game *Game) SetParse(prompt string, fun func(b byte) (Command, string)) {
 	frame := game.stack[len(game.stack)-1]
 	frame.Parse, frame.Prompt = fun, prompt
-}
-
-func (game *Game) SetParse(fun func(b byte) (Command, string)) {
-	game.stack[len(game.stack)-1].Parse = fun
 }
 
 func (game *Game) StackTop() *Frame {
@@ -529,8 +525,8 @@ func (game *Game) pickHand(p *Player, s string) Pile {
 	return selected
 }
 
-func (game *Game) split(list Pile, p *Player, fmt string) (Pile, Pile) {
-	v := strings.Split(fmt, ",")
+func (game *Game) split(list Pile, p *Player, cond string) (Pile, Pile) {
+	v := strings.Split(cond, ",")
 	num := v[0]
 	exact := true
 	if num[len(num)-1] == '-' {
@@ -600,7 +596,12 @@ func (game *Game) split(list Pile, p *Player, fmt string) (Pile, Pile) {
 		return in, list
 	}
 	out.Add(list...)
-	game.SetParse(func(b byte) (Command, string) {
+	prompt := "pick"
+	if !exact {
+		prompt += " up to"
+	}
+	prompt += fmt.Sprintf(" %v>", n)
+	game.SetParse(prompt, func(b byte) (Command, string) {
 		if b == '.' {
 			if exact {
 				return errCmd, "must pick a card"
@@ -728,7 +729,21 @@ func pickCard(game *Game, p *Player, o CardOpts) *Card {
 	if unique {
 		return prev
 	}
-	game.SetParse(func(b byte) (Command, string) {
+	prompt := "pick"
+	if o.any {
+		prompt += " any card"
+	} else {
+		if o.optional {
+			prompt = "you may " + prompt
+		}
+		prompt += " a card costing"
+		if !o.exact {
+			prompt += " up to"
+		}
+		prompt += fmt.Sprintf(" %v coins", o.cost)
+	}
+	prompt += ">"
+	game.SetParse(prompt, func(b byte) (Command, string) {
 		var c *Card
 		if b != '.' {
 			c = game.keyToCard(b)
@@ -827,7 +842,7 @@ func (game *Game) attack(fun func(*Player)) {
 }
 
 func (game *Game) getBool(p *Player, prompt string) bool {
-	game.SetParse2(prompt, func(b byte) (Command, string) {
+	game.SetParse(prompt, func(b byte) (Command, string) {
 		switch b {
 		case '\\':
 			return Command{s: "yes"}, ""

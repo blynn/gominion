@@ -193,10 +193,7 @@ Nobles,6,Action-Victory,#2
 			game.attack(func(other *Player) {
 				var v Pile
 				var c *Card
-				for {
-					if !other.MaybeShuffle() {
-						break
-					}
+				for other.MaybeShuffle() {
 					c = game.reveal(other)
 					other.deck = other.deck[1:]
 					if game.Cost(c) >= 3 {
@@ -305,7 +302,7 @@ func (game *Game) Choose(p *Player, n int, nfs []NameFun) {
 		fmt.Printf("[%d] %v\n", i+1, nf.name)
 	}
 	var selection []int
-	game.SetParse(func(b byte) (Command, string) {
+	game.SetParse(fmt.Sprintf("Choose %v:", n), func(b byte) (Command, string) {
 		if b < '1' || b > '0'+byte(len(nfs)) {
 			i := int(b - '1')
 			for _, x := range selection {
@@ -318,8 +315,7 @@ func (game *Game) Choose(p *Player, n int, nfs []NameFun) {
 		return Command{s: string(b)}, ""
 	})
 	for len(selection) < n {
-		cmd := game.getCommand(p)
-		selection = append(selection, int(cmd.s[0]-'1'))
+		selection = append(selection, int(game.getCommand(p).s[0]-'1'))
 	}
 	for _, v := range selection {
 		nfs[v].fun()
