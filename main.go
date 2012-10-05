@@ -29,6 +29,7 @@ type Card struct {
 	vp     func(*Game) int
 	supply int
 	act    []func(*Game)
+	react  func(*Game, *Player)
 }
 
 func PanickyAtoi(s string) int {
@@ -105,9 +106,12 @@ type Game struct {
 	fetch      func() []string
 	GetDiscard func(game *Game, p *Player) string
 
+	noAttack bool
+
 	// Actions played. (Can differ to actions spent because of e.g.
 	// Throne Room.)
-	aCount      int
+	aCount int
+
 	discount    int
 	copperbonus int
 }
@@ -577,20 +581,31 @@ func (game *Game) split(list Pile, p *Player, cond string) (Pile, Pile) {
 		if n > max {
 			n = max
 		}
-		if same && exact {
+		if n > 0 && same && exact {
+			count := 0
 			for _, c := range list {
-				if n > 0 && c == prev {
+				if count < n && c == prev {
 					in.Add(c)
-					n--
+					count++
 				} else {
 					out.Add(c)
 				}
 			}
+			game.cast("max", "forced", n, prev)
 			return in, out
 		}
-		game.cast("max", n)
+		game.cast("max", "", n)
 	} else {
-		n = PanickyAtoi(game.fetch()[0])
+		v := game.fetch()
+		if v[0] == "forced" {
+			n = PanickyAtoi(v[1])
+			c := game.keyToCard(v[2][0])
+			for i := 0; i < n; i++ {
+				in = append(in, c)
+			}
+			return in, list[n:]
+		}
+		n = PanickyAtoi(v[1])
 	}
 	if n == 0 {
 		return in, list
@@ -799,29 +814,21 @@ func (game *Game) inHand(p *Player, cond func(*Card) bool) bool {
 	return res
 }
 
-func reacts(game *Game, p *Player) bool {
+func (game *Game) reactCheck(p *Player) {
+	game.noAttack = false
 	if !game.inHand(p, (*Card).IsReaction) {
-		return false
+		return
 	}
-	var selected Pile
-	selected, _ = game.split(p.hand, p, "1-,kind Reaction")
-	if len(selected) == 0 {
-		return false
+	for {
+		var selected Pile
+		selected, _ = game.split(p.hand, p, "1-,kind Reaction")
+		if len(selected) == 0 {
+			return
+		}
+		c := selected[0]
+		fmt.Printf("%v reveals %v\n", p.name, c.name)
+		c.react(game, p)
 	}
-	c := selected[0]
-	fmt.Printf("%v reveals %v\n", p.name, c.name)
-	switch c.name {
-	case "Moat":
-		return true
-	case "Secret Chamber":
-		game.draw(p, 2)
-		selected := game.pickHand(p, "2")
-		fmt.Printf("%v decks %v cards\n", p.name, len(selected))
-		p.deck = append(selected, p.deck...)
-		return false
-	}
-	log.Print("unimplemented :(")
-	return false
 }
 
 func (game *Game) ForOthers(fun func(*Player)) {
@@ -834,7 +841,8 @@ func (game *Game) ForOthers(fun func(*Player)) {
 func (game *Game) attack(fun func(*Player)) {
 	game.ForOthers(func(other *Player) {
 		fmt.Printf("%v attacks %v\n", game.p.name, other.name)
-		if reacts(game, other) {
+		game.reactCheck(other)
+		if game.noAttack {
 			return
 		}
 		fun(other)
@@ -863,8 +871,9 @@ func (game *Game) getBool(p *Player, prompt string) bool {
 
 type CardDB struct {
 	List    string
-	Fun     map[string]func(game *Game)
-	VP      map[string]func(game *Game) int
+	Fun     map[string]func(*Game)
+	VP      map[string]func(*Game) int
+	React   map[string]func(*Game, *Player)
 	Presets string
 }
 
@@ -930,6 +939,9 @@ func loadDB(db CardDB) {
 		}
 		if fun, ok := db.VP[c.name]; ok {
 			c.vp = fun
+		}
+		if fun, ok := db.React[c.name]; ok {
+			c.react = fun
 		}
 	}
 	for _, line := range strings.Split(db.Presets, "\n") {

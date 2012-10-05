@@ -224,8 +224,11 @@ Adventurer,6,Action
 			}
 		},
 	},
-	VP: map[string]func(game *Game) int{
+	VP: map[string]func(*Game) int{
 		"Gardens": func(game *Game) int { return len(game.p.manifest) / 10 },
+	},
+	React: map[string]func(*Game, *Player){
+		"Moat": func(game *Game, p *Player) { game.noAttack = true },
 	},
 	Presets: `
 First Game:Cellar,Market,Militia,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop

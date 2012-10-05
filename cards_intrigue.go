@@ -281,6 +281,14 @@ Nobles,6,Action-Victory,#2
 			return n
 		},
 	},
+	React: map[string]func(*Game, *Player){
+		"Secret Chamber": func(game *Game, p *Player) {
+			game.draw(p, 2)
+			selected := game.pickHand(p, "2")
+			fmt.Printf("%v decks %v cards\n", p.name, len(selected))
+			p.deck = append(selected, p.deck...)
+		},
+	},
 	Presets: `
 Victory Dance:Bridge,Duke,Great Hall,Harem,Ironworks,Masquerade,Nobles,Pawn,Scout,Upgrade
 Secret Schemes:Conspirator,Harem,Ironworks,Pawn,Saboteur,Shanty Town,Steward,Swindler,Trading Post,Tribute
