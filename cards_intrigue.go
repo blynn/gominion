@@ -48,10 +48,7 @@ Nobles,6,Action-Victory,#2
 				{"+$1", func() { game.c++ }},
 			})
 		},
-		"Secret Chamber": func(game *Game) {
-			p := game.p
-			game.c += len(game.DiscardList(p, game.pickHand(p, "*")))
-		},
+		"Secret Chamber": func(game *Game) { game.c += len(game.DiscardList(game.p, game.pickHand(game.p, "*"))) },
 		"Masquerade": func(game *Game) {
 			m := len(game.players)
 			a := make([]*Card, m)
@@ -125,12 +122,8 @@ Nobles,6,Action-Victory,#2
 				game.addCards(1)
 			}
 		},
-		"Coppersmith": func(game *Game) {
-			game.copperbonus++
-		},
-		"Copper": func(game *Game) {
-			game.c += game.copperbonus
-		},
+		"Coppersmith": func(game *Game) { game.copperbonus++ },
+		"Copper": func(game *Game) { game.c += game.copperbonus },
 		"Ironworks": func(game *Game) {
 			c := pickGain(game, 4)
 			if c.IsAction() {
@@ -144,10 +137,8 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Mining Village": func(game *Game) {
-			p := game.p
-			if game.getBool(p, "trash for $2?") {
-				game.trash.Add(p.played[len(p.played)-1])
-				p.played = p.played[:len(p.played)-1]
+			if !game.WillTrashMe() && game.getBool(game.p, "trash for $2?") {
+				game.SetTrashMe()
 				game.c += 2
 			}
 		},

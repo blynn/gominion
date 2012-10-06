@@ -142,6 +142,9 @@ func (game *Game) DiscardList(p *Player, list Pile) Pile {
 	return list
 }
 
+func (game *Game) SetTrashMe()       { game.stack[len(game.stack)-1].trashMe = true }
+func (game *Game) WillTrashMe() bool { return game.stack[len(game.stack)-1].trashMe }
+
 func (game *Game) LeftOf(p *Player) *Player {
 	return game.players[(p.n+1)%len(game.players)]
 }
@@ -216,22 +219,27 @@ func (game *Game) keyToCard(key byte) *Card {
 }
 
 func (game *Game) MultiPlay(p *Player, c *Card, m int) {
-	p.played.Add(c)
 	if c.IsAction() {
 		game.aCount++
 	}
+	frame := &Frame{card: c}
+	game.stack = append(game.stack, frame)
 	for ; m > 0; m-- {
 		fmt.Printf("%v plays %v\n", p.name, c.name)
 		if c.act == nil {
 			fmt.Printf("%v unimplemented  :(\n", c.name)
 			return
 		}
-		game.stack = append(game.stack, &Frame{card: c})
 		for _, f := range c.act {
 			f(game)
 		}
-		game.stack = game.stack[:len(game.stack)-1]
 	}
+	if frame.trashMe {
+		game.TrashCard(p, c)
+	} else {
+		p.played.Add(c)
+	}
+	game.stack = game.stack[:len(game.stack)-1]
 }
 
 func (game *Game) Play(c *Card) {
@@ -276,9 +284,10 @@ func (game *Game) StackTop() *Frame {
 }
 
 type Frame struct {
-	Parse  func(b byte) (Command, string)
-	Prompt string
-	card   *Card
+	Parse   func(b byte) (Command, string)
+	Prompt  string
+	card    *Card
+	trashMe bool
 }
 
 type Command struct {
@@ -783,7 +792,9 @@ func pickCard(game *Game, p *Player, o CardOpts) *Card {
 
 func pickGainCond(game *Game, max int, fun func(*Card) string) *Card {
 	c := pickCard(game, game.p, CardOpts{cost: max, cond: fun})
-	game.panickyGain(game.p, c)
+	if c != nil {
+		game.panickyGain(game.p, c)
+	}
 	return c
 }
 

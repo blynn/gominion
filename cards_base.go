@@ -74,9 +74,7 @@ Adventurer,6,Action
 			})
 		},
 		"Feast": func(game *Game) {
-			p := game.p
-			game.trash.Add(p.played[len(p.played)-1])
-			p.played = p.played[:len(p.played)-1]
+			game.SetTrashMe()
 			pickGain(game, 5)
 		},
 		"Workshop": func(game *Game) { pickGain(game, 4) },

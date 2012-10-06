@@ -19,6 +19,7 @@ func (this SimpleBuyer) start(game *Game, p *Player) {
 			case "Militia":
 				// Keep first 3 cards.
 				for i := 0; i < 3; i++ {
+					// TODO: Support picks with multiple cards.
 					if i > 0 {
 						<-p.trigger
 					}
