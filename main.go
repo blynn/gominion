@@ -820,8 +820,7 @@ func (game *Game) reactCheck(p *Player) {
 		return
 	}
 	for {
-		var selected Pile
-		selected, _ = game.split(p.hand, p, "1-,kind Reaction")
+		selected, _ := game.split(p.hand, p, "1-,kind Reaction")
 		if len(selected) == 0 {
 			return
 		}
@@ -966,8 +965,7 @@ func loadDB(db CardDB) {
 	}
 }
 
-func main() {
-	runtime.GOMAXPROCS(4)
+func init() {
 	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
 		KindDict[s] = &Kind{s}
 	}
@@ -978,6 +976,10 @@ func main() {
 	kReaction = getKind("Reaction")
 	loadDB(cardsBase)
 	loadDB(cardsIntrigue)
+}
+
+func main() {
+	runtime.GOMAXPROCS(4)
 
 	log.SetFlags(log.Lshortfile)
 	flag.Parse()
