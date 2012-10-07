@@ -115,9 +115,22 @@ type Game struct {
 	// Buy count.
 	bCount int
 
-	discount    int
-	copperbonus int
+	discount int
+
+	data map[string]interface{}
 }
+
+var newGameHooks []func(*Game)
+
+func HookNewGame(fun func(*Game)) { newGameHooks = append(newGameHooks, fun) }
+
+var buyHooks []func(*Game, *Card)
+
+func HookBuy(fun func(*Game, *Card)) { buyHooks = append(buyHooks, fun) }
+
+var turnHooks []func(*Game)
+
+func HookTurn(fun func(*Game)) { turnHooks = append(turnHooks, fun) }
 
 const (
 	phSetup = iota
@@ -148,9 +161,7 @@ func (game *Game) DiscardList(p *Player, list Pile) Pile {
 func (game *Game) SetTrashMe()       { game.stack[len(game.stack)-1].trashMe = true }
 func (game *Game) WillTrashMe() bool { return game.stack[len(game.stack)-1].trashMe }
 
-func (game *Game) LeftOf(p *Player) *Player {
-	return game.players[(p.n+1)%len(game.players)]
-}
+func (game *Game) LeftOf(p *Player) *Player { return game.players[(p.n+1)%len(game.players)] }
 
 func (game *Game) Cost(c *Card) int {
 	n := c.cost - game.discount
@@ -267,6 +278,9 @@ func (game *Game) Spend(c *Card) {
 	game.c -= game.Cost(c)
 	game.b--
 	game.bCount++
+	for _, hook := range buyHooks {
+		hook(game, c)
+	}
 }
 
 func (game *Game) addCoins(n int)   { game.c += n }
@@ -305,14 +319,15 @@ type PlayFun interface {
 }
 
 type Player struct {
-	name                                  string
-	n                                     int
-	fun                                   PlayFun
-	manifest, deck, hand, played, discard Pile
-	trigger                               chan bool // When triggered, Player sends a Command on game.ch.
+	name    string
+	n       int
+	fun     PlayFun
+	trigger chan bool // When triggered, Player sends a Command on game.ch.
 	// TODO: Move recv to netGamer?
 	recv   chan string // For sending decisions to remote clients.
 	herald chan Event  // Events that may be worth printing.
+
+	manifest, deck, hand, played, discard Pile
 }
 
 type Event struct {
@@ -893,6 +908,7 @@ type CardDB struct {
 	VP      map[string]func(*Game) int
 	React   map[string]func(*Game, *Player)
 	Presets string
+	Setup   func()
 }
 
 type Preset struct {
@@ -927,9 +943,7 @@ func loadDB(db CardDB) {
 			c.kind = append(c.kind, kind)
 		}
 		CardDict[c.name] = c
-		add := func(fun func(game *Game)) {
-			c.act = append(c.act, fun)
-		}
+		add := func(fun func(game *Game)) { c.act = append(c.act, fun) }
 		for i := 3; i < len(a); i++ {
 			s := a[i]
 			switch s[0] {
@@ -952,15 +966,16 @@ func loadDB(db CardDB) {
 				panic(s)
 			}
 		}
-		if fun, ok := db.Fun[c.name]; ok {
-			add(fun)
-		}
-		if fun, ok := db.VP[c.name]; ok {
-			c.vp = fun
-		}
-		if fun, ok := db.React[c.name]; ok {
-			c.react = fun
-		}
+	}
+	for name, fun := range db.Fun {
+		c := GetCard(name)
+		c.act = append(c.act, fun)
+	}
+	for name, fun := range db.VP {
+		GetCard(name).vp = fun
+	}
+	for name, fun := range db.React {
+		GetCard(name).react = fun
 	}
 	for _, line := range strings.Split(db.Presets, "\n") {
 		if len(line) == 0 {
@@ -982,10 +997,13 @@ func loadDB(db CardDB) {
 		}
 		presets = append(presets, pr)
 	}
+	if db.Setup != nil {
+		db.Setup()
+	}
 }
 
 func init() {
-	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction"} {
+	for _, s := range []string{"Treasure", "Victory", "Curse", "Action", "Attack", "Reaction", "Duration"} {
 		KindDict[s] = &Kind{s}
 	}
 	kTreasure = getKind("Treasure")
@@ -1215,14 +1233,28 @@ func singleGame(game *Game) {
 	game.mainloop()
 }
 
+func (game *Game) NewGame() {
+	game.data = make(map[string]interface{})
+	for _, hook := range newGameHooks {
+		hook(game)
+	}
+}
+
+func (game *Game) StartTurn(i int) {
+	game.p = game.players[i]
+	game.a, game.b, game.c = 1, 1, 0
+	game.discount = 0
+	game.aCount = 0
+	game.bCount = 0
+	for _, hook := range turnHooks {
+		hook(game)
+	}
+}
+
 func (game *Game) mainloop() {
+	game.NewGame()
 	for i := 0; ; i = (i + 1) % len(game.players) {
-		game.p = game.players[i]
-		game.a, game.b, game.c = 1, 1, 0
-		game.discount = 0
-		game.copperbonus = 0
-		game.aCount = 0
-		game.bCount = 0
+		game.StartTurn(i)
 		p := game.p
 		prev := phCleanup
 		for game.phase = phAction; game.phase <= phCleanup; {

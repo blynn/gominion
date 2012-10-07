@@ -122,8 +122,8 @@ Nobles,6,Action-Victory,#2
 				game.addCards(1)
 			}
 		},
-		"Coppersmith": func(game *Game) { game.copperbonus++ },
-		"Copper":      func(game *Game) { game.c += game.copperbonus },
+		"Coppersmith": func(game *Game) { game.data["Coppersmith"] = game.data["Coppersmith"].(int) + 1 },
+		"Copper":      func(game *Game) { game.c += game.data["Coppersmith"].(int) },
 		"Ironworks": func(game *Game) {
 			c := pickGain(game, 4)
 			if c.IsAction() {
@@ -289,6 +289,7 @@ Deconstruction:Bridge,Mining Village,Remodel,Saboteur,Secret Chamber,Spy,Swindle
 Hand Madness:Bureaucrat,Chancellor,Council Room,Courtyard,Mine,Militia,Minion,Nobles,Steward,Torturer
 Underlings:Baron,Cellar,Festival,Library,Masquerade,Minion,Nobles,Pawn,Steward,Witch
 `,
+	Setup: func() { HookTurn(func(game *Game) { game.data["Coppersmith"] = 0 }) },
 }
 
 type NameFun struct {
