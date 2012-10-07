@@ -123,7 +123,7 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Coppersmith": func(game *Game) { game.copperbonus++ },
-		"Copper": func(game *Game) { game.c += game.copperbonus },
+		"Copper":      func(game *Game) { game.c += game.copperbonus },
 		"Ironworks": func(game *Game) {
 			c := pickGain(game, 4)
 			if c.IsAction() {
@@ -265,7 +265,7 @@ Nobles,6,Action-Victory,#2
 		"Duke": func(game *Game) int {
 			n := 0
 			for _, c := range game.p.manifest {
-				if c.name == "Duchy" {
+				if c == GetCard("Duchy") {
 					n++
 				}
 			}

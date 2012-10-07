@@ -112,6 +112,9 @@ type Game struct {
 	// Throne Room.)
 	aCount int
 
+	// Buy count.
+	bCount int
+
 	discount    int
 	copperbonus int
 }
@@ -263,6 +266,7 @@ func (game *Game) Play(c *Card) {
 func (game *Game) Spend(c *Card) {
 	game.c -= game.Cost(c)
 	game.b--
+	game.bCount++
 }
 
 func (game *Game) addCoins(n int)   { game.c += n }
@@ -448,6 +452,7 @@ func getKind(s string) *Kind {
 func (game *Game) CanPlay(p *Player, c *Card) string {
 	found := false
 	for i := len(p.hand) - 1; i >= 0; i-- {
+		// nil represents unknown cards.
 		if p.hand[i] == nil || p.hand[i] == c {
 			p.hand[i] = c
 			found = true
@@ -468,6 +473,9 @@ func (game *Game) CanPlay(p *Player, c *Card) string {
 	case c.IsTreasure():
 		if game.phase != phBuy {
 			return "wrong phase"
+		}
+		if game.bCount > 0 {
+			return "already bought a card"
 		}
 	default:
 		return "unplayable card"
@@ -1214,6 +1222,7 @@ func (game *Game) mainloop() {
 		game.discount = 0
 		game.copperbonus = 0
 		game.aCount = 0
+		game.bCount = 0
 		p := game.p
 		prev := phCleanup
 		for game.phase = phAction; game.phase <= phCleanup; {
