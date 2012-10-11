@@ -137,7 +137,11 @@ Nobles,6,Action-Victory,#2
 			}
 		},
 		"Mining Village": func(game *Game) {
-			if !game.WillTrashMe() && game.getBool(game.p, "trash for $2?") {
+			frame := game.stack[len(game.stack)-1]
+			if frame.popHook != nil {
+				return
+			}
+			if game.getBool(game.p, "trash for $2?") {
 				game.SetTrashMe()
 				game.c += 2
 			}

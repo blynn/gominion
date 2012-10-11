@@ -121,16 +121,16 @@ type Game struct {
 }
 
 var newGameHooks []func(*Game)
-
-func HookNewGame(fun func(*Game)) { newGameHooks = append(newGameHooks, fun) }
-
+var endGameHooks []func(*Game)
+var turnHooks []func(*Game)
+var attackHooks []func(*Game)
 var buyHooks []func(*Game, *Card)
 
+func HookNewGame(fun func(*Game))    { newGameHooks = append(newGameHooks, fun) }
+func HookEndGame(fun func(*Game))    { endGameHooks = append(endGameHooks, fun) }
 func HookBuy(fun func(*Game, *Card)) { buyHooks = append(buyHooks, fun) }
-
-var turnHooks []func(*Game)
-
-func HookTurn(fun func(*Game)) { turnHooks = append(turnHooks, fun) }
+func HookTurn(fun func(*Game))       { turnHooks = append(turnHooks, fun) }
+func HookAttack(fun func(*Game))     { attackHooks = append(attackHooks, fun) }
 
 const (
 	phSetup = iota
@@ -158,8 +158,10 @@ func (game *Game) DiscardList(p *Player, list Pile) Pile {
 	return list
 }
 
-func (game *Game) SetTrashMe()       { game.stack[len(game.stack)-1].trashMe = true }
-func (game *Game) WillTrashMe() bool { return game.stack[len(game.stack)-1].trashMe }
+func (game *Game) SetTrashMe() {
+	frame := game.StackTop()
+	frame.popHook = func() { game.TrashCard(game.p, frame.card) }
+}
 
 func (game *Game) LeftOf(p *Player) *Player { return game.players[(p.n+1)%len(game.players)] }
 
@@ -248,10 +250,10 @@ func (game *Game) MultiPlay(p *Player, c *Card, m int) {
 			f(game)
 		}
 	}
-	if frame.trashMe {
-		game.TrashCard(p, c)
-	} else {
+	if frame.popHook == nil {
 		p.played.Add(c)
+	} else {
+		frame.popHook()
 	}
 	game.stack = game.stack[:len(game.stack)-1]
 }
@@ -289,7 +291,7 @@ func (game *Game) addBuys(n int)    { game.b += n }
 func (game *Game) addCards(n int)   { game.draw(game.p, n) }
 
 func (game *Game) SetParse(prompt string, fun func(b byte) (Command, string)) {
-	frame := game.stack[len(game.stack)-1]
+	frame := game.StackTop()
 	frame.Parse, frame.Prompt = fun, prompt
 }
 
@@ -302,10 +304,11 @@ func (game *Game) StackTop() *Frame {
 }
 
 type Frame struct {
+	card    *Card
+	// TODO: Move these to Game?
 	Parse   func(b byte) (Command, string)
 	Prompt  string
-	card    *Card
-	trashMe bool
+	popHook func()
 }
 
 type Command struct {
@@ -514,6 +517,7 @@ func CanBuy(game *Game, c *Card) string {
 
 func (game *Game) Over() {
 	fmt.Printf("Game over\n")
+	game.runHooks(endGameHooks)
 	for _, p := range game.players {
 		game.p = p // Require current player for some VP computations.
 		score := 0
@@ -850,6 +854,7 @@ func (game *Game) inHand(p *Player, cond func(*Card) bool) bool {
 
 func (game *Game) reactCheck(p *Player) {
 	game.noAttack = false
+	game.runHooks(attackHooks)
 	if !game.inHand(p, (*Card).IsReaction) {
 		return
 	}
@@ -1013,6 +1018,7 @@ func init() {
 	kReaction = getKind("Reaction")
 	loadDB(cardsBase)
 	loadDB(cardsIntrigue)
+	loadDB(cardsSeaside)
 }
 
 func main() {
@@ -1233,11 +1239,15 @@ func singleGame(game *Game) {
 	game.mainloop()
 }
 
-func (game *Game) NewGame() {
-	game.data = make(map[string]interface{})
-	for _, hook := range newGameHooks {
+func (game *Game) runHooks(hooks []func(*Game)) {
+	for _, hook := range hooks {
 		hook(game)
 	}
+}
+
+func (game *Game) NewGame() {
+	game.data = make(map[string]interface{})
+	game.runHooks(newGameHooks)
 }
 
 func (game *Game) StartTurn(i int) {
@@ -1246,9 +1256,7 @@ func (game *Game) StartTurn(i int) {
 	game.discount = 0
 	game.aCount = 0
 	game.bCount = 0
-	for _, hook := range turnHooks {
-		hook(game)
-	}
+	game.runHooks(turnHooks)
 }
 
 func (game *Game) mainloop() {
