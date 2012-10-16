@@ -12,6 +12,19 @@ func (game *Game) addDuration(fun func()) {
 	}
 	game.data[key] = append(list, fun)
 }
+func (game *Game) peek(c *Card) *Card {
+	p := game.p
+	if game.isServer {
+		game.castCond(func(x *Player) bool { return x == p }, "peek", c)
+		game.castCond(func(x *Player) bool { return x != p }, "peek", "?")
+		return c
+	}
+	key := game.fetch()[0][0]
+	if key != '?' {
+		return game.keyToCard(key)
+	}
+	return nil
+}
 
 var cardsSeaside = CardDB{
 	List: `
@@ -21,10 +34,12 @@ Lighthouse,2,Action-Duration,+A1,$1
 Native Village,2,Action,+A2
 Pearl Diver,2,Action,+C1,+A1
 Fishing Village,3,Action-Duration,+A2,$1
+Lookout,3,Action,+A1
 Warehouse,3,Action,+C3,+A1
 Caravan,4,Action-Duration,+C1,+A1
 Cutpurse,4,Action-Attack,$2
 Island,4,Action-Victory,#2
+Navigator,4,Action,$2
 Salvager,4,Action,+B1
 Sea Hag,4,Action-Attack
 Bazaar,5,Action,+C1,+A2,$1
@@ -88,17 +103,7 @@ Wharf,5,Action-Duration,+C2,+B1
 			if !p.MaybeShuffle() {
 				return
 			}
-			var c *Card
-			if game.isServer {
-				c = p.deck[len(p.deck)-1]
-				game.castCond(func(x *Player) bool { return x == p }, "peek", c)
-				game.castCond(func(x *Player) bool { return x != p }, "peek", "?")
-			} else {
-				key := game.fetch()[0][0]
-				if key != '?' {
-					c = game.keyToCard(key)
-				}
-			}
+			c := game.peek(p.deck[len(p.deck)-1])
 			if c == nil {
 				fmt.Printf("%v looks at bottom card\n", p.name)
 			} else {
@@ -113,6 +118,38 @@ Wharf,5,Action-Duration,+C2,+B1
 				game.addActions(1)
 				game.addCoins(1)
 			})
+		},
+		"Lookout": func(game *Game) {
+			p := game.p
+			var v Pile
+			for i := 0; i < 3; i++ {
+				if !p.MaybeShuffle() {
+					break
+				}
+				c := game.peek(p.deck[0])
+				if c == nil {
+					fmt.Printf("%v looks at card #%v\n", p.name, i+1)
+				} else {
+					fmt.Printf("%v looks at [%c] %v\n", p.name, c.key, c.name)
+				}
+				v = append(v, c)
+				p.deck = p.deck[1:]
+			}
+			for i := 0; i < 3; i++ {
+				if len(v) == 0 {
+					break
+				}
+				var selected Pile
+				selected, v = game.split(v, p, "1")
+				switch i {
+				case 0:
+					game.TrashList(p, selected)
+				case 1:
+					game.DiscardList(p, selected)
+				case 2:
+					p.deck = append(selected, p.deck...)
+				}
+			}
 		},
 		"Warehouse": func(game *Game) { game.DiscardList(game.p, game.pickHand(game.p, "3")) },
 		"Caravan":   func(game *Game) { game.addDuration(func() { game.addCards(1) }) },
@@ -141,6 +178,37 @@ Wharf,5,Action-Duration,+C2,+B1
 				aside = append(aside, selected[0])
 			}
 			game.data[key] = aside
+		},
+		"Navigator": func(game *Game) {
+			p := game.p
+			var v Pile
+			for i := 0; i < 5; i++ {
+				if !p.MaybeShuffle() {
+					break
+				}
+				c := game.peek(p.deck[0])
+				if c == nil {
+					fmt.Printf("%v looks at #%v\n", p.name, i+1)
+				} else {
+					fmt.Printf("%v looks at [%c] %v\n", p.name, c.key, c.name)
+				}
+				v = append(v, c)
+				p.deck = p.deck[1:]
+			}
+			if len(v) == 0 {
+				return
+			}
+			if game.getBool(game.p, "discard?") {
+				game.DiscardList(p, v)
+				return
+			}
+			var perm Pile
+			for len(v) > 0 {
+				var selected Pile
+				selected, v = game.split(v, p, "1")
+				perm = append(perm, selected...)
+			}
+			p.deck = append(perm, p.deck...)
 		},
 		"Salvager": func(game *Game) {
 			p := game.p
@@ -238,4 +306,7 @@ Wharf,5,Action-Duration,+C2,+B1
 			}
 		})
 	},
+	Presets: `
+Test:Pearl Diver,Lookout,Navigator,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
+`,
 }

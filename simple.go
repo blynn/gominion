@@ -16,6 +16,8 @@ func (this SimpleBuyer) start(game *Game, p *Player) {
 						break
 					}
 				}
+			case "Ghost Ship":
+				fallthrough
 			case "Militia":
 				// Keep first 3 cards.
 				for i := 0; i < 3; i++ {
