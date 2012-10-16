@@ -35,18 +35,22 @@ Native Village,2,Action,+A2
 Pearl Diver,2,Action,+C1,+A1
 Fishing Village,3,Action-Duration,+A2,$1
 Lookout,3,Action,+A1
+Smugglers,3,Action
 Warehouse,3,Action,+C3,+A1
 Caravan,4,Action-Duration,+C1,+A1
 Cutpurse,4,Action-Attack,$2
 Island,4,Action-Victory,#2
 Navigator,4,Action,$2
+Pirate Ship,4,Action
 Salvager,4,Action,+B1
 Sea Hag,4,Action-Attack
+Treasure Map,4,Action
 Bazaar,5,Action,+C1,+A2,$1
 Explorer,5,Action
 Ghost Ship,5,Action-Attack,+C2
 Merchant Ship,5,Action-Duration,$2
 Tactician,5,Action-Duration
+Treasury,5,Action,+C1,+A1,$1
 Wharf,5,Action-Duration,+C2,+B1
 `,
 	Fun: map[string]func(game *Game){
@@ -63,7 +67,7 @@ Wharf,5,Action-Duration,+C2,+B1
 			if len(selected) == 0 {
 				return
 			}
-			game.addDuration(func() { p.hand = append(p.hand, selected...) })
+			game.addDuration(func() { p.hand.Add(selected...) })
 		},
 		"Lighthouse": func(game *Game) {
 			key := "Lighthouse/" + game.p.name
@@ -93,7 +97,7 @@ Wharf,5,Action-Duration,+C2,+B1
 					if _, ok := game.data[key]; !ok {
 						return
 					}
-					p.hand = append(p.hand, game.data[key].(Pile)...)
+					p.hand.Add(game.data[key].(Pile)...)
 					delete(game.data, key)
 				}},
 			})
@@ -132,7 +136,7 @@ Wharf,5,Action-Duration,+C2,+B1
 				} else {
 					fmt.Printf("%v looks at [%c] %v\n", p.name, c.key, c.name)
 				}
-				v = append(v, c)
+				v.Add(c)
 				p.deck = p.deck[1:]
 			}
 			for i := 0; i < 3; i++ {
@@ -148,6 +152,19 @@ Wharf,5,Action-Duration,+C2,+B1
 					game.DiscardList(p, selected)
 				case 2:
 					p.deck = append(selected, p.deck...)
+				}
+			}
+		},
+		"Smugglers": func(game *Game) {
+			key := "Smugglers/" + game.RightOf(game.p).name
+			if x, ok := game.data[key]; ok {
+				p := game.p
+				for _, c := range x.(Pile) {
+					fmt.Printf("[%c] %v\n", c.key, c.name)
+				}
+				selected, _ := game.split(x.(Pile), p, "1")
+				for _, c := range selected {
+					game.MaybeGain(p, c)
 				}
 			}
 		},
@@ -171,11 +188,11 @@ Wharf,5,Action-Duration,+C2,+B1
 			}
 			aside := game.data[key].(Pile)
 			frame := game.StackTop()
-			frame.popHook = func() { aside = append(aside, frame.card) }
+			frame.popHook = func() { aside.Add(frame.card) }
 			selected := game.pickHand(p, "1")
 			if len(selected) > 0 {
 				fmt.Printf("%v sets aside %v\n", p.name, selected[0].name)
-				aside = append(aside, selected[0])
+				aside.Add(selected[0])
 			}
 			game.data[key] = aside
 		},
@@ -192,7 +209,7 @@ Wharf,5,Action-Duration,+C2,+B1
 				} else {
 					fmt.Printf("%v looks at [%c] %v\n", p.name, c.key, c.name)
 				}
-				v = append(v, c)
+				v.Add(c)
 				p.deck = p.deck[1:]
 			}
 			if len(v) == 0 {
@@ -206,9 +223,45 @@ Wharf,5,Action-Duration,+C2,+B1
 			for len(v) > 0 {
 				var selected Pile
 				selected, v = game.split(v, p, "1")
-				perm = append(perm, selected...)
+				perm.Add(selected...)
 			}
 			p.deck = append(perm, p.deck...)
+		},
+		"Pirate Ship": func(game *Game) {
+			key := "Pirate Ship/" + game.p.name
+			var n int
+			if x, ok := game.data[key]; ok {
+				n = x.(int)
+			}
+			game.Choose(game.p, 1, []NameFun{
+				{"Arr! Loot others!", func() {
+					var loot, junk Pile
+					var found bool
+					game.attack(func(other *Player) {
+						for i := 0; i < 2 && other.MaybeShuffle(); i++ {
+							c := game.reveal(other)
+							other.deck = other.deck[1:]
+							if c.IsTreasure() {
+								loot.Add(c)
+							} else {
+								junk.Add(c)
+							}
+						}
+						if len(loot) > 0 {
+							found = true
+							var rest Pile
+							loot, rest = game.split(loot, game.p, "1,kind Treasure")
+							junk.Add(rest...)
+							game.TrashList(other, loot)
+							game.DiscardList(other, junk)
+						}
+					})
+					if found {
+						game.data[key] = n + 1
+					}
+				}},
+				{fmt.Sprintf("+%v Coins", n), func() { game.addCoins(n) }},
+			})
 		},
 		"Salvager": func(game *Game) {
 			p := game.p
@@ -225,12 +278,19 @@ Wharf,5,Action-Duration,+C2,+B1
 					game.DiscardList(other, other.deck[:1])
 					other.deck = other.deck[1:]
 				}
-				curse := GetCard("Curse")
-				if game.MaybeGain(other, curse) {
-					other.deck = append(Pile{curse}, other.deck...)
-					other.discard = other.discard[:len(other.discard)-1]
-				}
+				game.MaybeDeckGain(other, GetCard("Curse"))
 			})
+		},
+		"Treasure Map": func(game *Game) {
+			p := game.p
+			game.SetTrashMe()
+			selected := game.pickHand(p, "1,card Treasure Map")
+			if len(selected) == 0 {
+				return
+			}
+			game.TrashList(p, selected)
+			for i := 0; i < 4 && game.MaybeDeckGain(p, GetCard("Gold")); i++ {
+			}
 		},
 		"Explorer": func(game *Game) {
 			p := game.p
@@ -242,7 +302,7 @@ Wharf,5,Action-Duration,+C2,+B1
 				c = GetCard("Gold")
 			}
 			if game.MaybeGain(p, c) {
-				p.hand = append(p.hand, c)
+				p.hand.Add(c)
 				p.discard = p.discard[:len(p.discard)-1]
 			}
 		},
@@ -262,7 +322,7 @@ Wharf,5,Action-Duration,+C2,+B1
 			if len(p.hand) == 0 {
 				return
 			}
-			p.discard = append(p.discard, p.hand...)
+			game.DiscardList(p, p.hand)
 			p.hand = nil
 			game.addDuration(func() {
 				game.addCards(5)
@@ -288,6 +348,9 @@ Wharf,5,Action-Duration,+C2,+B1
 					}
 				}
 			}
+			if c.IsVictory() {
+				game.data["Treasury"] = true
+			}
 		})
 		HookTurn(func(game *Game) {
 			key := "Duration/" + game.p.name
@@ -296,7 +359,25 @@ Wharf,5,Action-Duration,+C2,+B1
 					f()
 				}
 			}
-			game.data[key] = nil
+			delete(game.data, key)
+
+			delete(game.data, "Treasury")
+
+			delete(game.data, "Smugglers/" + game.p.name)
+		})
+		HookClean(func(game *Game, c *Card) {
+			if c == GetCard("Treasury") {
+				if _, ok := game.data["Treasury"]; !ok {
+					p := game.p
+					frame := &Frame{card: c}
+					game.stack = append(game.stack, frame)
+					if game.getBool(p, "deck Treasury?") {
+						p.deck = append(Pile{c}, p.deck...)
+						p.discard = p.discard[:len(p.discard)-1]
+					}
+					game.stack = game.stack[:len(game.stack)-1]
+				}
+			}
 		})
 		HookAttack(func(game *Game) {
 			key := "Lighthouse/" + game.p.name
@@ -305,8 +386,19 @@ Wharf,5,Action-Duration,+C2,+B1
 				game.noAttack = true
 			}
 		})
+		HookGain(func(game *Game, c *Card) {
+			key := "Smugglers/" + game.p.name
+			var p Pile
+			if x, ok := game.data[key]; ok {
+				p = x.(Pile)
+			}
+			if game.Cost(c) <= 6 {
+				p.Add(c)
+			}
+			game.data[key] = p
+		})
 	},
 	Presets: `
-Test:Pearl Diver,Lookout,Navigator,Mine,Moat,Remodel,Smithy,Village,Woodcutter,Workshop
+Test:Pearl Diver,Lookout,Navigator,Treasure Map,Pirate Ship,Treasury,Smugglers,Village,Woodcutter,Workshop
 `,
 }

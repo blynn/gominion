@@ -125,12 +125,17 @@ var endGameHooks []func(*Game)
 var turnHooks []func(*Game)
 var attackHooks []func(*Game)
 var buyHooks []func(*Game, *Card)
+var gainHooks []func(*Game, *Card)
+var cleanHooks []func(*Game, *Card)
 
-func HookNewGame(fun func(*Game))    { newGameHooks = append(newGameHooks, fun) }
-func HookEndGame(fun func(*Game))    { endGameHooks = append(endGameHooks, fun) }
-func HookBuy(fun func(*Game, *Card)) { buyHooks = append(buyHooks, fun) }
-func HookTurn(fun func(*Game))       { turnHooks = append(turnHooks, fun) }
-func HookAttack(fun func(*Game))     { attackHooks = append(attackHooks, fun) }
+func HookNewGame(fun func(*Game)) { newGameHooks = append(newGameHooks, fun) }
+func HookEndGame(fun func(*Game)) { endGameHooks = append(endGameHooks, fun) }
+func HookTurn(fun func(*Game))    { turnHooks = append(turnHooks, fun) }
+func HookAttack(fun func(*Game))  { attackHooks = append(attackHooks, fun) }
+
+func HookBuy(fun func(*Game, *Card))   { buyHooks = append(buyHooks, fun) }
+func HookGain(fun func(*Game, *Card))   { gainHooks = append(gainHooks, fun) }
+func HookClean(fun func(*Game, *Card)) { cleanHooks = append(cleanHooks, fun) }
 
 const (
 	phSetup = iota
@@ -164,6 +169,13 @@ func (game *Game) SetTrashMe() {
 }
 
 func (game *Game) LeftOf(p *Player) *Player { return game.players[(p.n+1)%len(game.players)] }
+
+func (game *Game) RightOf(p *Player) *Player {
+	if p.n == 0 {
+		return game.players[len(game.players)-1]
+	}
+	return game.players[p.n-1]
+}
 
 func (game *Game) Cost(c *Card) int {
 	n := c.cost - game.discount
@@ -304,7 +316,7 @@ func (game *Game) StackTop() *Frame {
 }
 
 type Frame struct {
-	card    *Card
+	card *Card
 	// TODO: Move these to Game?
 	Parse   func(b byte) (Command, string)
 	Prompt  string
@@ -429,8 +441,14 @@ func (game *Game) revealHand(p *Player) {
 	}
 }
 
-func (game *Game) Cleanup(p *Player) {
-	p.discard.Add(p.played...)
+func (game *Game) Cleanup() {
+	p := game.p
+	for _, c := range p.played {
+		p.discard.Add(c)
+		for _, hook := range cleanHooks {
+			hook(game, c)
+		}
+	}
 	p.discard.Add(p.hand...)
 	p.played, p.hand = nil, nil
 }
@@ -583,7 +601,7 @@ func (game *Game) split(list Pile, p *Player, cond string) (Pile, Pile) {
 	var in, out Pile
 	satisfied := func(fns []string, c *Card) bool {
 		for _, fn := range fns {
-			v := strings.Split(fn, " ")
+			v := strings.SplitN(fn, " ", 2)
 			switch v[0] {
 			default:
 				panic(v[0])
@@ -716,16 +734,28 @@ func (game *Game) panickyGain(p *Player, c *Card) {
 	game.Report(Event{s: "gain", n: p.n, card: c})
 	p.discard.Add(c)
 	c.supply--
+	for _, hook := range gainHooks {
+		hook(game, c)
+	}
 }
 
 func (game *Game) MaybeGain(p *Player, c *Card) bool {
 	if c == nil {
-		return false
+		panic("unreachable")
 	}
 	if c.supply == 0 {
 		return false
 	}
 	game.panickyGain(p, c)
+	return true
+}
+
+func (game *Game) MaybeDeckGain(p *Player, c *Card) bool {
+	if !game.MaybeGain(p, c) {
+		return false
+	}
+	p.deck = append(Pile{c}, p.deck...)
+	p.discard = p.discard[:len(p.discard)-1]
 	return true
 }
 
@@ -890,12 +920,16 @@ func (game *Game) attack(fun func(*Player)) {
 func (game *Game) getBool(p *Player, prompt string) bool {
 	game.SetParse(prompt, func(b byte) (Command, string) {
 		switch b {
+		case 'y':
+			fallthrough
 		case '\\':
 			return Command{s: "yes"}, ""
+		case 'n':
+			fallthrough
 		case '.':
 			return Command{s: "done"}, ""
 		}
-		return errCmd, "\\ for yes, . for no"
+		return errCmd, "y for yes, n for no"
 	})
 	cmd := game.getCommand(p)
 	switch cmd.s {
@@ -1293,7 +1327,7 @@ func (game *Game) mainloop() {
 				game.phase++
 			}
 		}
-		game.Cleanup(p)
+		game.Cleanup()
 		n := 0
 		for _, c := range game.suplist {
 			if c.supply == 0 {

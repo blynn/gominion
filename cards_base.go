@@ -58,11 +58,7 @@ Adventurer,6,Action
 		},
 		"Bureaucrat": func(game *Game) {
 			p := game.p
-			if game.MaybeGain(p, GetCard("Silver")) {
-				n := len(p.discard)
-				p.deck = append(Pile{p.discard[n-1]}, p.deck...)
-				p.discard = p.discard[:n-1]
-			}
+			game.MaybeDeckGain(p, GetCard("Silver"))
 			game.attack(func(other *Player) {
 				selected := game.pickHand(other, "1,kind Victory")
 				if len(selected) == 0 {
